@@ -18,6 +18,7 @@ const {
   ensureDamubalaLoginWithWindow,
   getDamubalaSigningStats
 } = require('./damubalaSyncService');
+const { fetchQosymshaChildrenPreviewWithLogin } = require('./qosymshaSyncService');
 
 const DEFAULT_USER_ID = 'local-user';
 
@@ -412,6 +413,45 @@ function registerIpcHandlers() {
       return {
         success: false,
         message: error?.message || 'Не удалось синхронизировать детей из Damubala.'
+      };
+    }
+  });
+
+  ipcMain.handle('qosymsha:fetch-children-preview', async (event) => {
+    const sendProgress = (payload) => {
+      try {
+        event.sender.send('qosymsha:progress', payload || {});
+      } catch {
+        // renderer may be closed
+      }
+    };
+
+    try {
+      sendProgress({ stage: 'start', percent: 1, message: 'Запускаем загрузку Qosymsha...' });
+      const syncData = await fetchQosymshaChildrenPreviewWithLogin(sendProgress);
+      return { success: true, ...syncData };
+    } catch (error) {
+      sendProgress({ stage: 'error', percent: 0, message: error?.message || 'Ошибка загрузки Qosymsha.' });
+      return {
+        success: false,
+        message: error?.message || 'Не удалось получить данные из Qosymsha.'
+      };
+    }
+  });
+
+  ipcMain.handle('qosymsha:sync-vouchers', async (_, payload = {}) => {
+    try {
+      const imported = repository.importQosymshaVouchers({
+        cityId: Number(payload.cityId || 0),
+        studioId: Number(payload.studioId || 0),
+        fetched: Number(payload.fetched || 0),
+        items: Array.isArray(payload.items) ? payload.items : []
+      });
+      return { success: true, ...imported };
+    } catch (error) {
+      return {
+        success: false,
+        message: error?.message || 'Не удалось синхронизировать детей из Qosymsha.'
       };
     }
   });

@@ -1828,6 +1828,82 @@ th {
   align-items: center;
 }
 
+.children-selection-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  padding-top: 2px;
+}
+
+.children-selection-summary {
+  color: #99b4d6;
+  font-weight: 700;
+  padding: 0 4px 0 2px;
+  white-space: nowrap;
+}
+
+.children-selection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.children-selection-actions select {
+  min-width: 160px;
+  max-width: 220px;
+}
+
+.children-actions-menu {
+  position: relative;
+}
+
+.children-actions-menu summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  border: 1px solid var(--border);
+  background: rgba(22, 36, 57, 0.76);
+  color: #d6e5f8;
+  border-radius: 12px;
+  padding: 9px 12px;
+  font-weight: 700;
+}
+
+.children-actions-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.children-actions-menu[open] summary {
+  border-color: #63b0ff;
+  box-shadow: 0 0 0 2px rgba(99, 176, 255, 0.16);
+}
+
+.children-actions-menu-list {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  min-width: 230px;
+  z-index: 30;
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(67, 102, 141, 0.72);
+  background: linear-gradient(180deg, rgba(15, 27, 42, 0.98), rgba(11, 20, 31, 0.98));
+  box-shadow: 0 14px 34px rgba(2, 8, 16, 0.6);
+}
+
+.children-actions-menu-list button {
+  width: 100%;
+  justify-content: flex-start;
+  text-align: left;
+  font-size: 13px;
+  padding: 8px 10px;
+}
+
 .children-toolbar-right {
   display: flex;
   flex-wrap: wrap;
@@ -1837,7 +1913,7 @@ th {
 }
 
 .children-search {
-  min-width: 420px;
+  min-width: 320px;
 }
 
 .children-list-tabs {

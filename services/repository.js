@@ -893,11 +893,13 @@ function setChildrenCourse(payload = {}) {
   return { success: true, updated: Number(result.changes || 0) };
 }
 
-function importDamubalaVouchers(payload = {}) {
+function importExternalVouchers(payload = {}, options = {}) {
   const rows = Array.isArray(payload.items) ? payload.items : [];
   const db = getDb();
   const fallbackStudioId = Number(payload.studioId || 0);
   const fallbackCityId = Number(payload.cityId || 0);
+  const sourceName = String(options.sourceName || 'External').trim() || 'External';
+  const voucherPrefix = String(options.voucherPrefix || sourceName).trim().toUpperCase() || 'EXTERNAL';
 
   const findCityByName = db.prepare('SELECT id, name FROM Cities WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) LIMIT 1');
   const insertCity = db.prepare('INSERT INTO Cities (name) VALUES (?)');
@@ -924,7 +926,7 @@ function importDamubalaVouchers(payload = {}) {
   }
 
   function ensureStudio(city, studioNameRaw) {
-    const studioName = String(studioNameRaw || '').trim() || fallbackStudio?.name || 'Damubala Studio';
+    const studioName = String(studioNameRaw || '').trim() || fallbackStudio?.name || `${sourceName} Studio`;
     let studio = findStudioByName.get(city.id, studioName);
     if (!studio) {
       const res = insertStudio.run(studioName, city.id);
@@ -934,7 +936,7 @@ function importDamubalaVouchers(payload = {}) {
   }
 
   function ensureCourse(studio, courseNameRaw) {
-    const courseName = String(courseNameRaw || '').trim() || 'Damubala';
+    const courseName = String(courseNameRaw || '').trim() || sourceName;
     let course = findCourseByName.get(studio.id, courseName);
     if (!course) {
       const res = insertCourse.run(courseName, studio.id);
@@ -989,7 +991,7 @@ function importDamubalaVouchers(payload = {}) {
       const parentIIN = cleanDigits(raw?.parentIIN || '');
       const parentFullName = String(raw?.parentFullName || '').replace(/\s+/g, ' ').trim();
       const parentEmail = String(raw?.parentEmail || '').trim();
-      const voucherNumber = String(raw?.voucherNumber || 'DAMUBALA').trim() || 'DAMUBALA';
+      const voucherNumber = String(raw?.voucherNumber || voucherPrefix).trim() || voucherPrefix;
       const enrollmentDate = normalizeIsoDate(raw?.enrollmentDate) || toIsoDate(new Date());
       const voucherEndDate = normalizeIsoDate(raw?.voucherEndDate) || enrollmentDate;
       const city = ensureCity(raw?.cityName || raw?.regionName);
@@ -1045,6 +1047,20 @@ function importDamubalaVouchers(payload = {}) {
   });
 
   return result;
+}
+
+function importDamubalaVouchers(payload = {}) {
+  return importExternalVouchers(payload, {
+    sourceName: 'Damubala',
+    voucherPrefix: 'DAMUBALA'
+  });
+}
+
+function importQosymshaVouchers(payload = {}) {
+  return importExternalVouchers(payload, {
+    sourceName: 'Qosymsha',
+    voucherPrefix: 'QOSYMSHA'
+  });
 }
 
 function clearAllChildrenData() {
@@ -1618,6 +1634,7 @@ module.exports = {
   setChildrenMessageTag,
   setChildrenCourse,
   importDamubalaVouchers,
+  importQosymshaVouchers,
   clearAllChildrenData,
   savePaymentComment,
   markPaymentPaid,

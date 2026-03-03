@@ -65,6 +65,14 @@ contextBridge.exposeInMainWorld('api', {
   refreshDamubalaSigningStats: () => ipcRenderer.invoke('damubala:signing-stats-refresh'),
   fetchDamubalaVouchersPreview: () => ipcRenderer.invoke('damubala:fetch-vouchers-preview'),
   syncDamubalaVouchers: (payload) => ipcRenderer.invoke('damubala:sync-vouchers', payload),
+  fetchQosymshaChildrenPreview: () => ipcRenderer.invoke('qosymsha:fetch-children-preview'),
+  syncQosymshaVouchers: (payload) => ipcRenderer.invoke('qosymsha:sync-vouchers', payload),
+  onQosymshaProgress: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_, payload) => callback(payload || {});
+    ipcRenderer.on('qosymsha:progress', listener);
+    return () => ipcRenderer.removeListener('qosymsha:progress', listener);
+  },
   pickDamubalaSaveDir: () => ipcRenderer.invoke('damubala:pick-save-dir'),
   saveDamubalaImages: (payload) => ipcRenderer.invoke('damubala:save-images', payload)
 });

@@ -130,6 +130,15 @@ function messageTagLabel(tag) {
   return '—';
 }
 
+function qosymshaChildKey(item, index) {
+  return [
+    String(item?.childIIN || '').trim(),
+    String(item?.parentIIN || '').trim(),
+    String(item?.childFullName || '').trim().toLowerCase(),
+    index
+  ].join('|');
+}
+
 export default function ChildrenPage() {
   const location = useLocation();
   const [children, setChildren] = useState([]);
@@ -180,6 +189,13 @@ export default function ChildrenPage() {
   const [damubalaSyncLoadingText, setDamubalaSyncLoadingText] = useState('');
   const [damubalaPreview, setDamubalaPreview] = useState(null);
   const [damubalaSelectedApps, setDamubalaSelectedApps] = useState({});
+  const [qosymshaSyncing, setQosymshaSyncing] = useState(false);
+  const [qosymshaSyncModalOpen, setQosymshaSyncModalOpen] = useState(false);
+  const [qosymshaSyncLoadingText, setQosymshaSyncLoadingText] = useState('');
+  const [qosymshaSyncProgress, setQosymshaSyncProgress] = useState(0);
+  const [qosymshaPreview, setQosymshaPreview] = useState(null);
+  const [qosymshaSelectedChildren, setQosymshaSelectedChildren] = useState({});
+  const [qosymshaImportResult, setQosymshaImportResult] = useState(null);
   const [bulkEditOpen, setBulkEditOpen] = useState(false);
   const [bulkEditData, setBulkEditData] = useState({ cityId: '', studioId: '', courseId: '', messageTag: '', voucherNumber: '' });
   const importInputRef = useRef(null);
@@ -196,6 +212,19 @@ export default function ChildrenPage() {
     }, 180);
     return () => window.clearInterval(timer);
   }, [queueRefreshing]);
+
+  useEffect(() => {
+    if (!api.onQosymshaProgress) return undefined;
+    const unsubscribe = api.onQosymshaProgress((payload = {}) => {
+      const nextText = String(payload.message || '').trim();
+      const nextPercent = Number(payload.percent || 0);
+      if (nextText) setQosymshaSyncLoadingText(nextText);
+      if (Number.isFinite(nextPercent)) setQosymshaSyncProgress(Math.max(0, Math.min(100, nextPercent)));
+    });
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, []);
 
   async function loadMeta() {
     const [cityList, studioList, courseList] = await Promise.all([api.listCities(), api.listStudios(), api.listCourses()]);
@@ -479,6 +508,31 @@ export default function ChildrenPage() {
     }
   }
 
+  async function deleteSelectedRows() {
+    if (!selectedRows.length) return;
+    const isQueue = activeList === 'queue';
+    const label = isQueue ? 'записей очереди' : 'детей';
+    if (!window.confirm(`Удалить выбранных ${selectedRows.length} ${label}?`)) return;
+
+    try {
+      if (isQueue) {
+        await Promise.all(selectedRows.map((row) => api.deleteQueueChild(row.id)));
+      } else {
+        await Promise.all(selectedRows.map((row) => api.deleteChild(row.id)));
+      }
+
+      setSelectedIds({});
+      setSelectedChild(null);
+      setSelectedQueueChild(null);
+      await loadChildren();
+      await loadQueueChildren();
+      await loadChildrenCounts();
+      setError('');
+    } catch (e) {
+      setError(e?.message || 'Не удалось удалить выбранные записи.');
+    }
+  }
+
   function openDamubalaSyncModal() {
     setDamubalaPreview(null);
     setDamubalaSelectedApps({});
@@ -572,6 +626,105 @@ export default function ChildrenPage() {
     } finally {
       setDamubalaSyncing(false);
       setDamubalaSyncLoadingText('');
+    }
+  }
+
+  function openQosymshaSyncModal() {
+    setQosymshaPreview(null);
+    setQosymshaSelectedChildren({});
+    setQosymshaSyncLoadingText('');
+    setQosymshaSyncProgress(0);
+    setQosymshaImportResult(null);
+    setQosymshaSyncModalOpen(true);
+  }
+
+  async function startQosymshaPreviewLoad() {
+    setQosymshaSyncing(true);
+    setQosymshaSyncLoadingText('Окно Qosymsha открыто. Войдите в аккаунт...');
+    setQosymshaSyncProgress(4);
+    try {
+      const preview = await api.fetchQosymshaChildrenPreview();
+      if (!preview?.success) {
+        throw new Error(preview?.message || 'Не удалось получить детей из Qosymsha.');
+      }
+
+      const items = Array.isArray(preview.items) ? preview.items : [];
+      const defaultSelection = Object.fromEntries(items.map((item, idx) => [qosymshaChildKey(item, idx), true]));
+      setQosymshaSelectedChildren(defaultSelection);
+      setQosymshaPreview(preview);
+      setQosymshaSyncLoadingText('');
+      setQosymshaSyncProgress(100);
+      setQosymshaImportResult(null);
+      setError('');
+    } catch (e) {
+      setError(e?.message || 'Не удалось получить данные из Qosymsha.');
+      setQosymshaSyncProgress(0);
+    } finally {
+      setQosymshaSyncing(false);
+    }
+  }
+
+  function toggleQosymshaChild(item, index, checked) {
+    const key = qosymshaChildKey(item, index);
+    setQosymshaSelectedChildren((prev) => ({ ...prev, [key]: checked }));
+  }
+
+  function selectAllQosymshaChildren(checked) {
+    const items = Array.isArray(qosymshaPreview?.items) ? qosymshaPreview.items : [];
+    if (!items.length) return;
+    setQosymshaSelectedChildren(
+      Object.fromEntries(items.map((item, idx) => [qosymshaChildKey(item, idx), checked]))
+    );
+  }
+
+  async function importSelectedQosymshaChildren() {
+    const items = Array.isArray(qosymshaPreview?.items) ? qosymshaPreview.items : [];
+    const selectedItems = items.filter((item, idx) => !!qosymshaSelectedChildren[qosymshaChildKey(item, idx)]);
+    if (!selectedItems.length) {
+      setError('Выберите хотя бы одного ребенка из Qosymsha.');
+      return;
+    }
+
+    setQosymshaSyncing(true);
+    setQosymshaSyncLoadingText('Импортируем выбранных детей в базу...');
+    setQosymshaSyncProgress(100);
+    try {
+      const result = await api.syncQosymshaVouchers({
+        fetched: Number(qosymshaPreview?.fetched || selectedItems.length),
+        items: selectedItems
+      });
+
+      if (!result?.success) {
+        throw new Error(result?.message || 'Не удалось синхронизировать данные из Qosymsha.');
+      }
+
+      if (Number(result.added || 0) + Number(result.updated || 0) === 0 && Number(result.skipped || 0) > 0) {
+        const firstError = Array.isArray(result.errors) && result.errors.length ? `\n${result.errors[0]}` : '';
+        throw new Error(`Не удалось импортировать детей из Qosymsha.${firstError}`);
+      }
+
+      await loadChildren();
+      await loadChildrenCounts();
+      setActiveList('voucher');
+      setCityFilter('');
+      setStudioFilter('');
+      setCourseFilter('');
+      setMessageTagFilter('');
+      setSearch('');
+      setError('');
+      setQosymshaImportResult({
+        selected: selectedItems.length,
+        fetched: Number(result.fetched || 0),
+        added: Number(result.added || 0),
+        updated: Number(result.updated || 0),
+        skipped: Number(result.skipped || 0),
+        errors: Array.isArray(result.errors) ? result.errors.slice(0, 10) : []
+      });
+    } catch (e) {
+      setError(e?.message || 'Синхронизация с Qosymsha не удалась.');
+    } finally {
+      setQosymshaSyncing(false);
+      setQosymshaSyncLoadingText('');
     }
   }
 
@@ -955,40 +1108,52 @@ export default function ChildrenPage() {
             <button type="button" onClick={() => setSelectionMode((v) => !v)}>
               {selectionMode ? 'Скрыть выбор' : 'Выбрать'}
             </button>
-            {selectionMode && (
-              <>
-                <button type="button" onClick={selectAllVisible}>Выбрать всех</button>
-                <button type="button" onClick={clearVisibleSelection}>Отменить выбор всех</button>
-              </>
-            )}
-            {selectionMode && activeList === 'voucher' && (
-              <>
-                <button type="button" onClick={() => applyVoucherTag('qr')} disabled={!selectedRows.length}>Добавить пометку QR</button>
-                <button type="button" onClick={() => applyVoucherTag('reminder')} disabled={!selectedRows.length}>Добавить пометку Напоминание</button>
-                <button type="button" onClick={() => applyVoucherTag('')} disabled={!selectedRows.length}>Удалить пометку</button>
-                <select value={selectedCourseForBulk} onChange={(e) => setSelectedCourseForBulk(e.target.value)}>
-                  <option value="">Выбрать кружок</option>
-                  {selectableVoucherCourses.map((course) => (
-                    <option key={course.id} value={course.id}>{course.name}</option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  onClick={applySelectedCourseToVouchers}
-                  disabled={!selectedRows.length || !selectedCourseForBulk}
-                >
-                  Назначить кружок
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setBulkEditOpen(true)}
-                  disabled={!selectedRows.length}
-                >
-                  Изменить
-                </button>
-              </>
-            )}
           </div>
+
+          {selectionMode && (
+            <div className="children-selection-bar">
+              <div className="children-selection-summary">Выбрано: {selectedRows.length}</div>
+              <div className="children-selection-actions">
+                <button type="button" onClick={selectAllVisible}>Выбрать все</button>
+                <button type="button" onClick={clearVisibleSelection}>Снять все</button>
+                <button type="button" className="danger" onClick={deleteSelectedRows} disabled={!selectedRows.length}>
+                  Удалить
+                </button>
+                {activeList === 'voucher' && (
+                  <>
+                    <select value={selectedCourseForBulk} onChange={(e) => setSelectedCourseForBulk(e.target.value)}>
+                      <option value="">Кружок</option>
+                      {selectableVoucherCourses.map((course) => (
+                        <option key={course.id} value={course.id}>{course.name}</option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={applySelectedCourseToVouchers}
+                      disabled={!selectedRows.length || !selectedCourseForBulk}
+                    >
+                      Назначить
+                    </button>
+                    <details className="children-actions-menu">
+                      <summary>Еще</summary>
+                      <div className="children-actions-menu-list">
+                        <button type="button" onClick={() => applyVoucherTag('qr')} disabled={!selectedRows.length}>Пометка: QR</button>
+                        <button type="button" onClick={() => applyVoucherTag('reminder')} disabled={!selectedRows.length}>Пометка: Напоминание</button>
+                        <button type="button" onClick={() => applyVoucherTag('')} disabled={!selectedRows.length}>Убрать пометку</button>
+                        <button
+                          type="button"
+                          onClick={() => setBulkEditOpen(true)}
+                          disabled={!selectedRows.length}
+                        >
+                          Расширенное изменение
+                        </button>
+                      </div>
+                    </details>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
 
           <div className="children-toolbar-right">
             <input
@@ -1028,25 +1193,6 @@ export default function ChildrenPage() {
             )}
             <button onClick={() => { setImportResult(null); setImportSource('excel'); setImportOpen(true); }}>Импорт</button>
             <button onClick={() => setReportOpen(true)}>Отчет</button>
-            <button
-              className="danger"
-              onClick={async () => {
-                if (!window.confirm('Удалить всех детей, очередь и связанные данные?')) return;
-                try {
-                  await api.clearAllChildren();
-                  setSelectedChild(null);
-                  setSelectedQueueChild(null);
-                  setSelectedIds({});
-                  await loadChildren();
-                  await loadQueueChildren();
-                  await loadChildrenCounts();
-                } catch (e) {
-                  setError(e?.message || 'Не удалось удалить детей.');
-                }
-              }}
-            >
-              Удалить всех детей
-            </button>
           </div>
         </div>
       </div>
@@ -1617,6 +1763,13 @@ export default function ChildrenPage() {
               >
                 Damubala
               </button>
+              <button
+                type="button"
+                className={importSource === 'qosymsha' ? 'primary' : ''}
+                onClick={() => setImportSource('qosymsha')}
+              >
+                Qosymsha
+              </button>
             </div>
           )}
 
@@ -1636,6 +1789,25 @@ export default function ChildrenPage() {
                   disabled={damubalaSyncing}
                 >
                   {damubalaSyncing ? 'Подключение...' : 'Импортировать из Damubala'}
+                </button>
+              </div>
+            </div>
+          ) : activeList === 'voucher' && importSource === 'qosymsha' ? (
+            <div>
+              <div style={{ marginTop: 6, color: '#97a7c3', fontSize: 13 }}>
+                Импорт детей из Qosymsha по карточкам ребенка и законного представителя.
+              </div>
+              <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
+                <button
+                  className="primary"
+                  type="button"
+                  onClick={() => {
+                    setImportOpen(false);
+                    openQosymshaSyncModal();
+                  }}
+                  disabled={qosymshaSyncing}
+                >
+                  {qosymshaSyncing ? 'Подключение...' : 'Импортировать из Qosymsha'}
                 </button>
               </div>
             </div>
@@ -1812,6 +1984,122 @@ export default function ChildrenPage() {
                   Импортировать выбранных детей
                 </button>
               </div>
+            </div>
+          )}
+        </Modal>
+      )}
+
+      {qosymshaSyncModalOpen && (
+        <Modal title="Синхронизация с Qosymsha" onClose={() => !qosymshaSyncing && setQosymshaSyncModalOpen(false)}>
+          {!qosymshaPreview && (
+            <div className="form-grid">
+              {qosymshaSyncing && (
+                <div className="full queue-refresh-wrap" style={{ marginTop: 2 }}>
+                  <div className="queue-refresh-spinner" />
+                  <div className="queue-refresh-text">{qosymshaSyncLoadingText || 'Загрузка данных...'}</div>
+                  <div className="queue-refresh-progress">
+                    <div className="queue-refresh-progress-head">
+                      <span>Прогресс загрузки</span>
+                      <b>{Math.min(100, Math.round(qosymshaSyncProgress || 0))}%</b>
+                    </div>
+                    <div className="queue-refresh-track">
+                      <div className="queue-refresh-fill" style={{ width: `${Math.min(100, qosymshaSyncProgress || 0)}%` }} />
+                    </div>
+                  </div>
+                </div>
+              )}
+              {!qosymshaSyncing && (
+                <div className="full" style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+                  <button className="primary" type="button" onClick={startQosymshaPreviewLoad}>
+                    Войти в Qosymsha и получить детей
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {qosymshaPreview && (
+            <div>
+              <div style={{ color: '#97a7c3', marginBottom: 10 }}>
+                Выберите детей, которых нужно импортировать.
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                <button type="button" onClick={() => selectAllQosymshaChildren(true)}>Выбрать все</button>
+                <button type="button" onClick={() => selectAllQosymshaChildren(false)}>Снять выбор</button>
+              </div>
+              <div className="panel" style={{ maxHeight: 340, overflow: 'auto', padding: 10 }}>
+                {(qosymshaPreview.items || []).map((item, idx) => {
+                  const key = qosymshaChildKey(item, idx);
+                  return (
+                    <label key={key} style={{ display: 'grid', gridTemplateColumns: '24px 1fr', gap: 8, marginBottom: 8 }}>
+                      <input
+                        type="checkbox"
+                        checked={!!qosymshaSelectedChildren[key]}
+                        onChange={(e) => toggleQosymshaChild(item, idx, e.target.checked)}
+                      />
+                      <div>
+                        <b>{item.childFullName || `Ребенок ${idx + 1}`}</b>
+                        <div style={{ color: '#97a7c3', fontSize: 12, marginTop: 2 }}>
+                          ИИН ребенка: {item.childIIN || '—'} • ИИН родителя: {item.parentIIN || '—'}
+                        </div>
+                        <div style={{ color: '#97a7c3', fontSize: 12, marginTop: 2 }}>
+                          Родитель: {item.parentFullName || '—'} • Телефон: {item.parentPhone || '—'}
+                        </div>
+                        <div style={{ color: '#97a7c3', fontSize: 12, marginTop: 2 }}>
+                          Город: {item.cityName || '—'} • Студия: {item.studioName || '—'} • Кружок: {item.courseName || '—'}
+                        </div>
+                      </div>
+                    </label>
+                  );
+                })}
+                {!qosymshaPreview.items?.length && <div>Не найдено карточек детей на странице.</div>}
+              </div>
+              {qosymshaSyncing && (
+                <div className="queue-refresh-wrap" style={{ marginTop: 10 }}>
+                  <div className="queue-refresh-spinner" />
+                  <div className="queue-refresh-text">{qosymshaSyncLoadingText || 'Импорт...'}</div>
+                  <div className="queue-refresh-progress">
+                    <div className="queue-refresh-progress-head">
+                      <span>Прогресс загрузки</span>
+                      <b>{Math.min(100, Math.round(qosymshaSyncProgress || 0))}%</b>
+                    </div>
+                    <div className="queue-refresh-track">
+                      <div className="queue-refresh-fill" style={{ width: `${Math.min(100, qosymshaSyncProgress || 0)}%` }} />
+                    </div>
+                  </div>
+                </div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 12 }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQosymshaPreview(null);
+                    setQosymshaSelectedChildren({});
+                    setQosymshaImportResult(null);
+                  }}
+                  disabled={qosymshaSyncing}
+                >
+                  Назад
+                </button>
+                <button className="primary" type="button" onClick={importSelectedQosymshaChildren} disabled={qosymshaSyncing}>
+                  Импортировать выбранных детей
+                </button>
+              </div>
+              {qosymshaImportResult && (
+                <div className="panel" style={{ marginTop: 12 }}>
+                  <div><b>Итог импорта Qosymsha</b></div>
+                  <div>Выбрано: {qosymshaImportResult.selected}</div>
+                  <div>Получено: {qosymshaImportResult.fetched}</div>
+                  <div>Добавлено: {qosymshaImportResult.added}</div>
+                  <div>Обновлено: {qosymshaImportResult.updated}</div>
+                  <div>Пропущено: {qosymshaImportResult.skipped}</div>
+                  {!!qosymshaImportResult.errors?.length && (
+                    <div style={{ marginTop: 8, color: '#ff9aa5' }}>
+                      {qosymshaImportResult.errors.map((err) => <div key={err}>{err}</div>)}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </Modal>
