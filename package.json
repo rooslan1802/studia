@@ -1,0 +1,51 @@
+{
+  "name": "studia-manager",
+  "version": "1.0.0",
+  "description": "Local desktop app for managing children's creative studios",
+  "main": "main/main.js",
+  "author": "",
+  "license": "MIT",
+  "scripts": {
+    "start": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "db:reset": "node scripts/reset-db.js",
+    "dev:renderer": "vite --config renderer/vite.config.js",
+    "dev:electron": "wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
+    "build": "npm run build:renderer",
+    "build:renderer": "vite build --config renderer/vite.config.js",
+    "build:mac": "npm run build:renderer && electron-builder --mac",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "build": {
+    "appId": "com.studia.manager",
+    "productName": "Studia",
+    "directories": {
+      "output": "release"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.business"
+    }
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^7.0.0-rc.9",
+    "better-sqlite3": "^11.10.0",
+    "jspdf": "^4.2.0",
+    "jspdf-autotable": "^5.0.7",
+    "qrcode": "^1.5.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.30.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.7.0",
+    "concurrently": "^9.2.1",
+    "cross-env": "^7.0.3",
+    "electron": "^35.0.0",
+    "electron-builder": "^25.1.8",
+    "vite": "^5.4.19",
+    "wait-on": "^8.0.3"
+  }
+}

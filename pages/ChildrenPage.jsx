@@ -1,0 +1,1909 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation } from 'react-router-dom';
+import { api } from '@renderer/api';
+import ChildModal from '@components/ChildModal';
+import Modal from '@components/Modal';
+
+const paidReportFields = [
+  { key: 'cityName', label: 'Город' },
+  { key: 'studioName', label: 'Студия' },
+  { key: 'childName', label: 'ФИО ребенка' },
+  { key: 'childAge', label: 'Возраст' },
+  { key: 'courseName', label: 'Кружок' },
+  { key: 'groupName', label: 'Группа' },
+  { key: 'lastPaymentDate', label: 'Дата последней оплаты' },
+  { key: 'parentPhone', label: 'Номер телефона' }
+];
+
+const voucherReportFields = [
+  { key: 'cityName', label: 'Город' },
+  { key: 'studioName', label: 'Студия' },
+  { key: 'childName', label: 'ФИО ребенка' },
+  { key: 'childAge', label: 'Возраст' },
+  { key: 'courseName', label: 'Кружок' },
+  { key: 'groupName', label: 'Группа' },
+  { key: 'parentPhone', label: 'Номер телефона' }
+];
+
+const queueReportFields = [
+  { key: 'cityName', label: 'Город' },
+  { key: 'studioName', label: 'Студия' },
+  { key: 'childFullName', label: 'ФИО ребенка' },
+  { key: 'childAge', label: 'Возраст' },
+  { key: 'phone', label: 'Номер телефона' },
+  { key: 'queueCategory', label: 'Категория очереди' },
+  { key: 'queueDate', label: 'Дата очереди' },
+  { key: 'queueNumber', label: 'Номер очереди' }
+];
+
+function getReportFieldsByList(type) {
+  if (type === 'queue') return queueReportFields;
+  if (type === 'voucher') return voucherReportFields;
+  return paidReportFields;
+}
+
+function formatQueueNumber(queueNumber) {
+  const normalized = String(queueNumber ?? '').trim();
+  if (!normalized) return '—';
+  if (normalized.toUpperCase() === 'ВАУЧЕР') return 'ВАУЧЕР';
+  return normalized;
+}
+
+function parseBirthDateFromIIN(iinRaw) {
+  const iin = String(iinRaw || '').replace(/\D/g, '');
+  if (iin.length < 6) return '';
+  const yy = Number(iin.slice(0, 2));
+  const mm = Number(iin.slice(2, 4));
+  const dd = Number(iin.slice(4, 6));
+  const nowYY = new Date().getFullYear() % 100;
+  const year = yy <= nowYY ? 2000 + yy : 1900 + yy;
+  const date = new Date(year, mm - 1, dd);
+  if (date.getFullYear() !== year || date.getMonth() !== mm - 1 || date.getDate() !== dd) return '';
+  return `${String(year).padStart(4, '0')}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
+}
+
+function ageFromBirthDate(isoDate) {
+  if (!isoDate) return '';
+  const birth = new Date(`${isoDate}T00:00:00`);
+  if (Number.isNaN(birth.getTime())) return '';
+  const now = new Date();
+  let age = now.getFullYear() - birth.getFullYear();
+  const m = now.getMonth() - birth.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < birth.getDate())) age -= 1;
+  return age >= 0 ? age : '';
+}
+
+function todayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function normalizeText(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function asIsoDate(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  if (/^\d{2}\.\d{2}\.\d{4}$/.test(raw)) {
+    const [dd, mm, yyyy] = raw.split('.');
+    return `${yyyy}-${mm}-${dd}`;
+  }
+  const dt = new Date(raw);
+  if (!Number.isNaN(dt.getTime())) return dt.toISOString().slice(0, 10);
+  return '';
+}
+
+function digitsOnly(value) {
+  return String(value || '').replace(/\D/g, '');
+}
+
+function getQueueRowMissingFields(row) {
+  const checks = [
+    { key: 'childFullName', title: 'ФИО ребенка', value: row['ФИО ребенка'] || row.childFullName },
+    { key: 'childIIN', title: 'ИИН ребенка', value: row['ИИН ребенка'] || row.childIIN },
+    { key: 'parentFullName', title: 'ФИО родителя', value: row['ФИО родителя'] || row.parentFullName },
+    { key: 'parentIIN', title: 'ИИН родителя', value: row['ИИН родителя'] || row.parentIIN },
+    { key: 'phone', title: 'Телефон', value: row['Телефон'] || row.phone },
+    { key: 'queueDate', title: 'Дата очереди', value: row['Дата очереди'] || row.queueDate },
+    { key: 'queueNumber', title: 'Номер очереди', value: row['Номер очереди'] || row.queueNumber },
+    { key: 'queueCategory', title: 'Категория очереди', value: row['Категория очереди'] || row.queueCategory }
+  ];
+  return checks.filter((x) => String(x.value || '').trim() === '');
+}
+
+function compareValues(a, b, direction = 'asc') {
+  const dir = direction === 'desc' ? -1 : 1;
+  const av = a ?? '';
+  const bv = b ?? '';
+  const an = Number(av);
+  const bn = Number(bv);
+  if (!Number.isNaN(an) && !Number.isNaN(bn) && String(av).trim() !== '' && String(bv).trim() !== '') {
+    return (an - bn) * dir;
+  }
+  return String(av).localeCompare(String(bv), 'ru', { sensitivity: 'base' }) * dir;
+}
+
+function messageTagLabel(tag) {
+  if (tag === 'qr') return 'QR';
+  if (tag === 'reminder') return 'Напоминание';
+  return '—';
+}
+
+export default function ChildrenPage() {
+  const location = useLocation();
+  const [children, setChildren] = useState([]);
+  const [childrenCounts, setChildrenCounts] = useState({ paid: 0, voucher: 0 });
+  const [queueChildren, setQueueChildren] = useState([]);
+  const [cities, setCities] = useState([]);
+  const [studios, setStudios] = useState([]);
+  const [courses, setCourses] = useState([]);
+  const [groups, setGroups] = useState([]);
+  const [modalData, setModalData] = useState(null);
+  const [selectedChild, setSelectedChild] = useState(null);
+  const [selectedChildTagDraft, setSelectedChildTagDraft] = useState('');
+  const [selectedChildTagSaving, setSelectedChildTagSaving] = useState(false);
+  const [selectedQueueChild, setSelectedQueueChild] = useState(null);
+  const [queueModalData, setQueueModalData] = useState(null);
+
+  const [cityFilter, setCityFilter] = useState('');
+  const [studioFilter, setStudioFilter] = useState('');
+  const [courseFilter, setCourseFilter] = useState('');
+  const [messageTagFilter, setMessageTagFilter] = useState('');
+  const [activeList, setActiveList] = useState(() => {
+    const params = new URLSearchParams(location.search);
+    const type = params.get('type');
+    return type === 'voucher' || type === 'paid' ? type : 'paid';
+  });
+
+  const [error, setError] = useState('');
+  const [search, setSearch] = useState('');
+
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportSelected, setReportSelected] = useState(getReportFieldsByList(activeList).map((x) => x.key));
+  const [queueRefreshing, setQueueRefreshing] = useState(false);
+  const [queueRefreshOpen, setQueueRefreshOpen] = useState(false);
+  const [queueRefreshResult, setQueueRefreshResult] = useState(null);
+  const [queueRefreshProgress, setQueueRefreshProgress] = useState(0);
+  const [queueToVoucherData, setQueueToVoucherData] = useState(null);
+  const [childrenSort, setChildrenSort] = useState({ key: 'childName', direction: 'asc' });
+  const [queueSort, setQueueSort] = useState({ key: 'childFullName', direction: 'asc' });
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState({});
+  const [selectedCourseForBulk, setSelectedCourseForBulk] = useState('');
+  const [importOpen, setImportOpen] = useState(false);
+  const [importSource, setImportSource] = useState('excel');
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState(null);
+  const [damubalaSyncing, setDamubalaSyncing] = useState(false);
+  const [damubalaSyncModalOpen, setDamubalaSyncModalOpen] = useState(false);
+  const [damubalaSyncLoadingText, setDamubalaSyncLoadingText] = useState('');
+  const [damubalaPreview, setDamubalaPreview] = useState(null);
+  const [damubalaSelectedApps, setDamubalaSelectedApps] = useState({});
+  const [bulkEditOpen, setBulkEditOpen] = useState(false);
+  const [bulkEditData, setBulkEditData] = useState({ cityId: '', studioId: '', courseId: '', messageTag: '', voucherNumber: '' });
+  const importInputRef = useRef(null);
+
+  useEffect(() => {
+    if (!queueRefreshing) return undefined;
+    const timer = window.setInterval(() => {
+      setQueueRefreshProgress((prev) => {
+        if (prev >= 94) return prev;
+        if (prev < 35) return Math.min(prev + 7, 94);
+        if (prev < 70) return Math.min(prev + 4, 94);
+        return Math.min(prev + 2, 94);
+      });
+    }, 180);
+    return () => window.clearInterval(timer);
+  }, [queueRefreshing]);
+
+  async function loadMeta() {
+    const [cityList, studioList, courseList] = await Promise.all([api.listCities(), api.listStudios(), api.listCourses()]);
+    setCities(cityList);
+    setStudios(studioList);
+    setCourses(courseList);
+
+    const groupLists = await Promise.all(courseList.map((course) => api.listGroups(course.id)));
+    setGroups(groupLists.flat());
+  }
+
+  async function loadChildren() {
+    if (activeList === 'queue') return;
+    const list = await api.listChildren({
+      cityId: cityFilter ? Number(cityFilter) : undefined,
+      studioId: studioFilter ? Number(studioFilter) : undefined,
+      courseId: courseFilter ? Number(courseFilter) : undefined,
+      messageTag: activeList === 'voucher' ? (messageTagFilter || undefined) : undefined,
+      type: activeList === 'paid' || activeList === 'voucher' ? activeList : undefined
+    });
+    setChildren(list);
+  }
+
+  async function loadChildrenCounts() {
+    const list = await api.listChildren({
+      cityId: cityFilter ? Number(cityFilter) : undefined,
+      studioId: studioFilter ? Number(studioFilter) : undefined,
+      courseId: courseFilter ? Number(courseFilter) : undefined
+    });
+    setChildrenCounts({
+      paid: list.filter((x) => x.type === 'paid').length,
+      voucher: list.filter((x) => x.type === 'voucher').length
+    });
+  }
+
+  async function loadQueueChildren() {
+    const list = await api.listQueueChildren({
+      cityId: cityFilter ? Number(cityFilter) : undefined,
+      studioId: studioFilter ? Number(studioFilter) : undefined
+    });
+    setQueueChildren(list);
+    if (selectedQueueChild?.id) {
+      const refreshed = list.find((x) => x.id === selectedQueueChild.id);
+      if (refreshed) setSelectedQueueChild(refreshed);
+    }
+  }
+
+  async function loadAll() {
+    await loadMeta();
+    await loadChildren();
+  }
+
+  async function openEdit(childId) {
+    const full = await api.getChild(childId);
+    if (full) setModalData(full);
+  }
+
+  async function openProfile(row) {
+    const full = await api.getChild(row.id);
+    if (full) {
+      setSelectedChild({ ...full, _meta: row });
+    }
+  }
+
+  async function saveSelectedChildTag() {
+    if (!selectedChild || selectedChild.type !== 'voucher') return;
+    setSelectedChildTagSaving(true);
+    try {
+      await api.saveChild({
+        id: selectedChild.id,
+        studioId: selectedChild.studioId,
+        courseId: selectedChild.courseId,
+        groupId: selectedChild.groupId,
+        type: selectedChild.type,
+        messageTag: selectedChildTagDraft || '',
+        profile: selectedChild.profile
+      });
+      const refreshed = await api.getChild(selectedChild.id);
+      if (refreshed) {
+        setSelectedChild((prev) => ({ ...refreshed, _meta: prev?._meta }));
+      }
+      await loadChildren();
+      setError('');
+    } catch (e) {
+      setError(e?.message || 'Не удалось обновить пометку.');
+    } finally {
+      setSelectedChildTagSaving(false);
+    }
+  }
+
+  useEffect(() => {
+    loadAll();
+    loadQueueChildren();
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const type = params.get('type');
+    const q = params.get('q');
+    if (type === 'voucher' || type === 'paid') setActiveList(type);
+    if (q !== null) setSearch(q);
+  }, [location.search]);
+
+  useEffect(() => {
+    const fields = getReportFieldsByList(activeList);
+    setReportSelected(fields.map((x) => x.key));
+  }, [activeList]);
+
+  useEffect(() => {
+    setSelectionMode(false);
+    setSelectedIds({});
+    setSelectedCourseForBulk('');
+    if (activeList !== 'voucher') setMessageTagFilter('');
+  }, [activeList]);
+
+  useEffect(() => {
+    loadChildren();
+    loadChildrenCounts();
+    loadQueueChildren();
+  }, [cityFilter, studioFilter, courseFilter, messageTagFilter, activeList]);
+
+  useEffect(() => {
+    setSelectedChildTagDraft(selectedChild?.messageTag || '');
+  }, [selectedChild?.id, selectedChild?.messageTag]);
+
+  const filteredStudios = useMemo(
+    () => studios.filter((s) => !cityFilter || Number(s.cityId) === Number(cityFilter)),
+    [studios, cityFilter]
+  );
+
+  const filteredCourses = useMemo(
+    () => courses.filter((c) => !studioFilter || Number(c.studioId) === Number(studioFilter)),
+    [courses, studioFilter]
+  );
+  const selectableVoucherCourses = useMemo(() => {
+    if (!studioFilter) return courses;
+    return courses.filter((course) => Number(course.studioId) === Number(studioFilter));
+  }, [courses, studioFilter]);
+
+  const filteredRows = useMemo(() => {
+    if (activeList === 'queue') return [];
+    if (!search.trim()) return children;
+    const q = search.toLowerCase();
+    return children.filter((x) =>
+      [x.childName, x.cityName, x.studioName, x.courseName, x.groupName, x.parentPhone, messageTagLabel(x.messageTag)]
+        .filter(Boolean)
+        .some((v) => String(v).toLowerCase().includes(q))
+    );
+  }, [children, search, activeList]);
+
+  const filteredQueueRows = useMemo(() => {
+    if (activeList !== 'queue') return [];
+    if (!search.trim()) return queueChildren;
+    const q = search.toLowerCase();
+    return queueChildren.filter((x) =>
+      [
+        x.childFullName,
+        x.childIIN,
+        x.parentFullName,
+        x.parentIIN,
+        x.phone,
+        x.cityName,
+        x.studioName,
+        x.childBirthDate,
+        x.childAge,
+        x.queueCategory,
+        x.comment,
+        x.queueNumber
+      ]
+        .filter(Boolean)
+        .some((v) => String(v).toLowerCase().includes(q))
+    );
+  }, [queueChildren, search, activeList]);
+
+  const sortedRows = useMemo(() => {
+    const rows = [...filteredRows];
+    rows.sort((a, b) => compareValues(a[childrenSort.key], b[childrenSort.key], childrenSort.direction));
+    return rows;
+  }, [filteredRows, childrenSort]);
+
+  const sortedQueueRows = useMemo(() => {
+    const rows = [...filteredQueueRows];
+    rows.sort((a, b) => {
+      if (queueSort.key === 'queueNumber') {
+        const aq = String(a.queueNumber || '').trim().toUpperCase() === 'ВАУЧЕР' ? Number.MAX_SAFE_INTEGER : Number(a.queueNumber || 0);
+        const bq = String(b.queueNumber || '').trim().toUpperCase() === 'ВАУЧЕР' ? Number.MAX_SAFE_INTEGER : Number(b.queueNumber || 0);
+        return compareValues(aq, bq, queueSort.direction);
+      }
+      return compareValues(a[queueSort.key], b[queueSort.key], queueSort.direction);
+    });
+    return rows;
+  }, [filteredQueueRows, queueSort]);
+
+  const selectableRows = useMemo(() => (activeList === 'queue' ? sortedQueueRows : sortedRows), [activeList, sortedRows, sortedQueueRows]);
+  const selectedRows = useMemo(() => selectableRows.filter((row) => selectedIds[row.id]), [selectableRows, selectedIds]);
+
+  function toggleChildrenSort(key) {
+    setChildrenSort((prev) => ({
+      key,
+      direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
+    }));
+  }
+
+  function toggleQueueSort(key) {
+    setQueueSort((prev) => ({
+      key,
+      direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
+    }));
+  }
+
+  function renderSortArrow(state, key) {
+    if (state.key !== key) return '⇅';
+    return state.direction === 'asc' ? '↑' : '↓';
+  }
+
+  function toggleSelected(rowId, checked) {
+    setSelectedIds((prev) => ({ ...prev, [rowId]: checked }));
+  }
+
+  function selectAllVisible() {
+    setSelectedIds(Object.fromEntries(selectableRows.map((row) => [row.id, true])));
+  }
+
+  function clearVisibleSelection() {
+    setSelectedIds(Object.fromEntries(selectableRows.map((row) => [row.id, false])));
+  }
+
+  async function applyVoucherTag(tag) {
+    const ids = selectedRows.map((row) => row.id);
+    if (!ids.length) return;
+    try {
+      await api.setChildrenMessageTag({ ids, messageTag: tag });
+      await loadChildren();
+      setError('');
+    } catch (e) {
+      setError(e?.message || 'Не удалось обновить пометки.');
+    }
+  }
+
+  async function applySelectedCourseToVouchers() {
+    const ids = selectedRows.map((row) => row.id);
+    const courseId = Number(selectedCourseForBulk || 0);
+    if (!ids.length || !courseId) return;
+    try {
+      const res = await api.setChildrenCourse({ ids, courseId });
+      await loadChildren();
+      setError('');
+      window.alert(`Кружок назначен для ${Number(res?.updated || 0)} детей.`);
+    } catch (e) {
+      setError(e?.message || 'Не удалось назначить кружок выбранным детям.');
+    }
+  }
+
+  async function applyBulkEditToSelectedVouchers() {
+    const ids = selectedRows.map((row) => row.id);
+    if (!ids.length) return;
+    try {
+      for (const id of ids) {
+        const full = await api.getChild(id);
+        if (!full || full.type !== 'voucher') continue;
+        const profile = { ...(full.profile || {}) };
+        if (String(bulkEditData.voucherNumber || '').trim()) {
+          profile.voucherNumber = String(bulkEditData.voucherNumber || '').trim();
+        }
+        await api.saveChild({
+          id: full.id,
+          studioId: bulkEditData.studioId ? Number(bulkEditData.studioId) : full.studioId,
+          courseId: bulkEditData.courseId ? Number(bulkEditData.courseId) : full.courseId,
+          groupId: full.groupId,
+          type: 'voucher',
+          messageTag: bulkEditData.messageTag !== '' ? bulkEditData.messageTag : full.messageTag || '',
+          profile
+        });
+      }
+      setBulkEditOpen(false);
+      await loadChildren();
+      await loadChildrenCounts();
+      setError('');
+    } catch (e) {
+      setError(e?.message || 'Не удалось применить изменения к выбранным детям.');
+    }
+  }
+
+  function openDamubalaSyncModal() {
+    setDamubalaPreview(null);
+    setDamubalaSelectedApps({});
+    setDamubalaSyncLoadingText('');
+    setDamubalaSyncModalOpen(true);
+  }
+
+  async function startDamubalaPreviewLoad() {
+    setDamubalaSyncing(true);
+    setDamubalaSyncLoadingText('Окно Damubala открыто. Войдите в аккаунт...');
+    const stageTimer = window.setTimeout(() => {
+      setDamubalaSyncLoadingText('Вход выполнен. Загружаем заявки и детей из Damubala...');
+    }, 8000);
+    try {
+      const preview = await api.fetchDamubalaVouchersPreview();
+      if (!preview?.success) {
+        throw new Error(preview?.message || 'Не удалось получить список заявок из Damubala.');
+      }
+
+      const apps = Array.isArray(preview.applications) ? preview.applications : [];
+      const defaultSelection = Object.fromEntries(apps.map((app) => [app.applicationId, true]));
+      setDamubalaSelectedApps(defaultSelection);
+      setDamubalaPreview(preview);
+      setDamubalaSyncLoadingText('');
+      setError('');
+    } catch (e) {
+      setError(e?.message || 'Не удалось получить данные из Damubala.');
+    } finally {
+      window.clearTimeout(stageTimer);
+      setDamubalaSyncing(false);
+    }
+  }
+
+  function toggleDamubalaApplication(applicationId, checked) {
+    setDamubalaSelectedApps((prev) => ({ ...prev, [applicationId]: checked }));
+  }
+
+  function selectAllDamubalaApplications(checked) {
+    if (!damubalaPreview?.applications?.length) return;
+    setDamubalaSelectedApps(
+      Object.fromEntries(damubalaPreview.applications.map((app) => [app.applicationId, checked]))
+    );
+  }
+
+  async function importSelectedDamubalaChildren() {
+    const items = Array.isArray(damubalaPreview?.items) ? damubalaPreview.items : [];
+    const selectedAppIds = Object.entries(damubalaSelectedApps)
+      .filter(([, selected]) => !!selected)
+      .map(([id]) => Number(id))
+      .filter(Boolean);
+
+    if (!selectedAppIds.length) {
+      setError('Выберите хотя бы один номер заявки.');
+      return;
+    }
+
+    const selectedItems = items.filter((item) => selectedAppIds.includes(Number(item.applicationId || 0)));
+    if (!selectedItems.length) {
+      setError('По выбранным заявкам не найдено детей для импорта.');
+      return;
+    }
+
+    setDamubalaSyncing(true);
+    setDamubalaSyncLoadingText('Импортируем выбранных детей в базу...');
+    try {
+      const result = await api.syncDamubalaVouchers({
+        fetched: Number(damubalaPreview?.fetched || selectedItems.length),
+        items: selectedItems
+      });
+
+      if (!result?.success) {
+        throw new Error(result?.message || 'Не удалось синхронизировать данные.');
+      }
+
+      await loadChildren();
+      await loadChildrenCounts();
+      setError('');
+      setDamubalaSyncModalOpen(false);
+
+      window.alert(
+        `Синхронизация завершена.\n` +
+        `Выбрано заявок: ${selectedAppIds.length}\n` +
+        `Получено из Damubala: ${result.fetched || 0}\n` +
+        `Добавлено: ${result.added || 0}\n` +
+        `Обновлено: ${result.updated || 0}\n` +
+        `Пропущено: ${result.skipped || 0}\n` +
+        `Технический кружок: ${result.courseName || '—'}`
+      );
+    } catch (e) {
+      setError(e?.message || 'Синхронизация с Damubala не удалась.');
+    } finally {
+      setDamubalaSyncing(false);
+      setDamubalaSyncLoadingText('');
+    }
+  }
+
+  function exportReport(format) {
+    const fields = getReportFieldsByList(activeList);
+    const selected = fields.filter((f) => reportSelected.includes(f.key));
+    const header = selected.map((f) => f.label);
+    const sourceRows = activeList === 'queue' ? sortedQueueRows : sortedRows;
+    const rows = sourceRows.map((row) =>
+      selected.map((f) => {
+        if (f.key === 'queueNumber') return formatQueueNumber(row.queueNumber);
+        return row[f.key] ?? '';
+      })
+    );
+
+    if (format === 'xlsx') {
+      import('xlsx').then((XLSX) => {
+        const data = rows.map((row) => Object.fromEntries(row.map((v, idx) => [header[idx], v])));
+        const ws = XLSX.utils.json_to_sheet(data);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Отчет');
+        const suffix = activeList === 'queue' ? 'queue' : activeList;
+        XLSX.writeFile(wb, `children-report-${suffix}.xlsx`);
+      });
+      return;
+    }
+
+    const html = `
+      <html><head><meta charset="utf-8" /><title>Children Report</title>
+      <style>table{border-collapse:collapse;width:100%}th,td{border:1px solid #bbb;padding:6px;font-size:12px;text-align:left}</style>
+      </head><body>
+      <h3>Отчет по детям</h3>
+      <table><thead><tr>${header.map((h) => `<th>${h}</th>`).join('')}</tr></thead>
+      <tbody>${rows.map((r) => `<tr>${r.map((v) => `<td>${String(v)}</td>`).join('')}</tr>`).join('')}</tbody></table>
+      </body></html>
+    `;
+    const w = window.open('', '_blank');
+    w.document.write(html);
+    w.document.close();
+    w.focus();
+    w.print();
+  }
+
+  const queueBirthDate = parseBirthDateFromIIN(queueModalData?.childIIN);
+  const queueAge = ageFromBirthDate(queueBirthDate);
+  const transferBirthDate = parseBirthDateFromIIN(queueToVoucherData?.childIIN);
+  const transferAge = ageFromBirthDate(transferBirthDate);
+  const transferCourses = useMemo(
+    () => courses.filter((c) => Number(c.studioId) === Number(queueToVoucherData?.studioId || 0)),
+    [courses, queueToVoucherData?.studioId]
+  );
+  const transferGroups = useMemo(
+    () => groups.filter((g) => Number(g.courseId) === Number(queueToVoucherData?.courseId || 0)),
+    [groups, queueToVoucherData?.courseId]
+  );
+  const activeListLabel = activeList === 'queue' ? 'Очередь' : activeList === 'voucher' ? 'Ваучеры' : 'Платники';
+
+  function openQueueTransfer(row) {
+    const isVoucher = String(row.queueNumber || '').trim().toUpperCase() === 'ВАУЧЕР';
+    if (!isVoucher) return;
+    setQueueToVoucherData({
+      queueId: row.id,
+      cityId: row.cityId || cityFilter || '',
+      studioId: row.studioId || studioFilter || '',
+      courseId: '',
+      groupId: '',
+      childFullName: row.childFullName || '',
+      childIIN: row.childIIN || '',
+      parentPhone: row.phone || '',
+      parentFullName: row.parentFullName || '',
+      parentIIN: row.parentIIN || '',
+      parentEmail: '',
+      enrollmentDate: todayIso(),
+      voucherNumber: '',
+      voucherEndDate: '',
+      sourceQueueNumber: String(row.queueNumber || '')
+    });
+  }
+
+  function downloadImportTemplate() {
+    const type = activeList;
+    const baseRows = [];
+    let headers = [];
+    if (type === 'paid') {
+      headers = [
+        'Город', 'Студия', 'Кружок', 'Группа',
+        'ФИО ребенка', 'ИИН ребенка', 'Дата рождения', 'Возраст',
+        'Телефон родителя', 'ФИО родителя', 'Дата зачисления',
+        'Старт оплаты', 'Дата последней оплаты'
+      ];
+      baseRows.push({
+        'Город': 'Астана',
+        'Студия': studios[0]?.name || '',
+        'Кружок': courses[0]?.name || '',
+        'Группа': '',
+        'ФИО ребенка': '',
+        'ИИН ребенка': '',
+        'Дата рождения': '',
+        'Возраст': '',
+        'Телефон родителя': '',
+        'ФИО родителя': '',
+        'Дата зачисления': todayIso(),
+        'Старт оплаты': todayIso(),
+        'Дата последней оплаты': ''
+      });
+    } else if (type === 'voucher') {
+      headers = [
+        'Город', 'Студия', 'Кружок', 'Группа',
+        'ФИО ребенка', 'ИИН ребенка', 'Дата рождения', 'Возраст',
+        'Телефон родителя', 'ФИО родителя', 'ИИН родителя', 'Email родителя',
+        'Дата зачисления'
+      ];
+      baseRows.push({
+        'Город': 'Астана',
+        'Студия': studios[0]?.name || '',
+        'Кружок': courses[0]?.name || '',
+        'Группа': '',
+        'ФИО ребенка': '',
+        'ИИН ребенка': '',
+        'Дата рождения': '',
+        'Возраст': '',
+        'Телефон родителя': '',
+        'ФИО родителя': '',
+        'ИИН родителя': '',
+        'Email родителя': '',
+        'Дата зачисления': todayIso()
+      });
+    } else {
+      headers = [
+        'Город', 'Студия', 'ФИО ребенка', 'ИИН ребенка',
+        'ФИО родителя', 'ИИН родителя', 'Телефон',
+        'Дата очереди', 'Номер очереди', 'Категория очереди', 'Комментарий'
+      ];
+      baseRows.push({
+        'Город': 'Астана',
+        'Студия': studios[0]?.name || '',
+        'ФИО ребенка': '',
+        'ИИН ребенка': '',
+        'ФИО родителя': '',
+        'ИИН родителя': '',
+        'Телефон': '',
+        'Дата очереди': todayIso(),
+        'Номер очереди': '',
+        'Категория очереди': '',
+        'Комментарий': ''
+      });
+    }
+
+    import('xlsx').then((XLSX) => {
+      const ws = XLSX.utils.json_to_sheet(baseRows, { header: headers, skipHeader: false });
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, activeListLabel);
+      XLSX.writeFile(wb, `template-${activeList}.xlsx`);
+    });
+  }
+
+  function resolveStudioId(row) {
+    const studioIdNum = Number(row['ID студии'] || row.studioId || 0);
+    if (studioIdNum) return studioIdNum;
+    const cityName = normalizeText(row['Город'] || row.cityName);
+    const studioName = normalizeText(row['Студия'] || row.studioName);
+    const city = cities.find((c) => normalizeText(c.name) === cityName);
+    const studioCandidates = studios.filter((s) => normalizeText(s.name) === studioName);
+    if (city) {
+      const byCity = studioCandidates.find((s) => Number(s.cityId) === Number(city.id));
+      if (byCity) return byCity.id;
+    }
+    return studioCandidates[0]?.id || 0;
+  }
+
+  function resolveCourseId(row, studioId) {
+    const courseIdNum = Number(row['ID кружка'] || row.courseId || 0);
+    if (courseIdNum) return courseIdNum;
+    const courseName = normalizeText(row['Кружок'] || row.courseName);
+    if (!courseName) return 0;
+    const list = courses.filter((c) => normalizeText(c.name) === courseName && Number(c.studioId) === Number(studioId));
+    return list[0]?.id || 0;
+  }
+
+  function resolveGroupId(row, courseId) {
+    const groupIdNum = Number(row['ID группы'] || row.groupId || 0);
+    if (groupIdNum) return groupIdNum;
+    const groupName = normalizeText(row['Группа'] || row.groupName);
+    if (!groupName) return null;
+    const list = groups.filter((g) => normalizeText(g.name) === groupName && Number(g.courseId) === Number(courseId));
+    return list[0]?.id || null;
+  }
+
+  async function importRows(rows) {
+    const type = activeList;
+    let success = 0;
+    let failed = 0;
+    const errors = [];
+
+    for (let i = 0; i < rows.length; i += 1) {
+      const row = rows[i];
+      const rowNum = i + 2;
+      try {
+        if (type === 'queue') {
+          const cityName = normalizeText(row['Город'] || row.cityName);
+          const city = cities.find((c) => normalizeText(c.name) === cityName);
+          const studioId = resolveStudioId(row);
+          if (!city?.id) throw new Error('Не найден город');
+          if (!studioId) throw new Error('Не найдена студия');
+
+          await api.saveQueueChild({
+            cityId: city.id,
+            studioId,
+            childFullName: String(row['ФИО ребенка'] || row.childFullName || '').trim(),
+            childIIN: digitsOnly(row['ИИН ребенка'] || row.childIIN),
+            parentFullName: String(row['ФИО родителя'] || row.parentFullName || '').trim(),
+            parentIIN: digitsOnly(row['ИИН родителя'] || row.parentIIN),
+            phone: String(row['Телефон'] || row.phone || '').trim(),
+            queueDate: asIsoDate(row['Дата очереди'] || row.queueDate) || todayIso(),
+            queueNumber: String(row['Номер очереди'] || row.queueNumber || '').trim(),
+            queueCategory: String(row['Категория очереди'] || row.queueCategory || '').trim(),
+            comment: String(row['Комментарий'] || row.comment || '').trim()
+          });
+        } else {
+          const studioId = resolveStudioId(row);
+          if (!studioId) throw new Error('Не найдена студия');
+          const courseId = resolveCourseId(row, studioId);
+          if (!courseId) throw new Error('Не найден кружок');
+          const groupId = resolveGroupId(row, courseId);
+
+          const childIIN = digitsOnly(row['ИИН ребенка'] || row.childIIN);
+          const childBirthDate = asIsoDate(row['Дата рождения'] || row.childBirthDate);
+          const ageRaw = String(row['Возраст'] || row.childAge || '').trim();
+          const manualAge = ageRaw === '' ? null : Number(ageRaw);
+          const enrollmentDate = asIsoDate(row['Дата зачисления'] || row.enrollmentDate) || todayIso();
+
+          const profile = {
+            childFullName: String(row['ФИО ребенка'] || row.childFullName || '').trim(),
+            childIIN,
+            childBirthDate,
+            manualAge: Number.isFinite(manualAge) ? manualAge : null,
+            parentPhone: String(row['Телефон родителя'] || row.parentPhone || '').trim(),
+            parentFullName: String(row['ФИО родителя'] || row.parentFullName || '').trim(),
+            enrollmentDate
+          };
+
+          if (type === 'paid') {
+            profile.paymentStartDate = asIsoDate(row['Старт оплаты'] || row.paymentStartDate) || enrollmentDate;
+            profile.lastPaymentDate = asIsoDate(row['Дата последней оплаты'] || row.lastPaymentDate) || '';
+            profile.lessonsCount = 0;
+          } else {
+            profile.parentIIN = digitsOnly(row['ИИН родителя'] || row.parentIIN);
+            profile.parentEmail = String(row['Email родителя'] || row.parentEmail || '').trim();
+            profile.voucherNumber = String(row['Номер ваучера'] || row.voucherNumber || 'ВАУЧЕР').trim() || 'ВАУЧЕР';
+            profile.voucherEndDate = asIsoDate(row['Окончание ваучера'] || row.voucherEndDate) || enrollmentDate;
+          }
+
+          await api.saveChild({
+            studioId,
+            courseId,
+            groupId,
+            type,
+            profile
+          });
+        }
+        success += 1;
+      } catch (e) {
+        failed += 1;
+        errors.push(`Строка ${rowNum}: ${e?.message || 'ошибка импорта'}`);
+      }
+    }
+
+    setImportResult({ success, failed, errors: errors.slice(0, 10) });
+    await loadAll();
+    await loadQueueChildren();
+    await loadChildrenCounts();
+  }
+
+  async function handleImportFile(file) {
+    if (!file) return;
+    setImporting(true);
+    setImportResult(null);
+    try {
+      const XLSX = await import('xlsx');
+      const buffer = await file.arrayBuffer();
+      const wb = XLSX.read(buffer, { type: 'array' });
+      const sheetName = wb.SheetNames[0];
+      const sheet = wb.Sheets[sheetName];
+      let rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+      if (!rows.length) {
+        setImportResult({ success: 0, failed: 0, errors: ['Файл пустой.'] });
+      } else {
+        if (activeList === 'queue') {
+          const missingInfo = [];
+          rows = rows.map((row, idx) => {
+            const missing = getQueueRowMissingFields(row);
+            if (!missing.length) return row;
+            const rowNum = idx + 2;
+            missingInfo.push(`Строка ${rowNum}: ${missing.map((x) => x.title).join(', ')}`);
+            const fallbackNumber = String(900000 + idx);
+            return {
+              ...row,
+              childFullName: String(row['ФИО ребенка'] || row.childFullName || '').trim() || `Ребенок ${idx + 1}`,
+              childIIN: digitsOnly(row['ИИН ребенка'] || row.childIIN) || '000000000000',
+              parentFullName: String(row['ФИО родителя'] || row.parentFullName || '').trim() || 'Не указано',
+              parentIIN: digitsOnly(row['ИИН родителя'] || row.parentIIN) || '000000000000',
+              phone: String(row['Телефон'] || row.phone || '').trim() || '+70000000000',
+              queueDate: asIsoDate(row['Дата очереди'] || row.queueDate) || todayIso(),
+              queueNumber: String(row['Номер очереди'] || row.queueNumber || '').trim() || fallbackNumber,
+              queueCategory: String(row['Категория очереди'] || row.queueCategory || '').trim() || 'Не указано'
+            };
+          });
+
+          if (missingInfo.length) {
+            const preview = missingInfo.slice(0, 12).join('\n');
+            const extra = missingInfo.length > 12 ? `\n... и еще ${missingInfo.length - 12} строк.` : '';
+            const confirmText =
+              `В файле есть неполные данные очереди.\n\n${preview}${extra}\n\n` +
+              'Продолжить загрузку с автозаполнением пустых полей значениями по умолчанию?';
+            if (!window.confirm(confirmText)) {
+              setImportResult({ success: 0, failed: 0, errors: ['Импорт отменен пользователем.'] });
+              return;
+            }
+          }
+        }
+        await importRows(rows);
+      }
+    } catch (e) {
+      setImportResult({ success: 0, failed: 1, errors: [e?.message || 'Не удалось прочитать Excel.'] });
+    } finally {
+      setImporting(false);
+      if (importInputRef.current) importInputRef.current.value = '';
+    }
+  }
+
+  return (
+    <section className="children-page">
+      {error && <p style={{ color: '#ff6978' }}>{error}</p>}
+      <div className="children-sticky-top">
+        <div className="children-list-tabs">
+          <button className={activeList === 'paid' ? 'tab-active' : ''} onClick={() => setActiveList('paid')}>
+            Платники ({childrenCounts.paid})
+          </button>
+          <button className={activeList === 'voucher' ? 'tab-active' : ''} onClick={() => setActiveList('voucher')}>
+            Ваучеры ({childrenCounts.voucher})
+          </button>
+          <button className={activeList === 'queue' ? 'tab-active' : ''} onClick={() => setActiveList('queue')}>
+            Очередь ({queueChildren.length})
+          </button>
+        </div>
+
+        <div className="toolbar children-toolbar">
+          <div className="children-toolbar-left">
+            {activeList !== 'queue' && <button className="primary" onClick={() => setModalData({})}>Добавить ребенка</button>}
+            {activeList === 'queue' && (
+              <button
+                className="primary"
+                onClick={() => setQueueModalData({ cityId: cityFilter || '', studioId: studioFilter || '' })}
+              >
+                Добавить ребенка
+              </button>
+            )}
+            <select value={cityFilter} onChange={(e) => { setCityFilter(e.target.value); setStudioFilter(''); setCourseFilter(''); }}>
+              <option value="">Все города</option>
+              {cities.map((city) => <option key={city.id} value={city.id}>{city.name}</option>)}
+            </select>
+
+            <select value={studioFilter} onChange={(e) => { setStudioFilter(e.target.value); setCourseFilter(''); }}>
+              <option value="">Все студии</option>
+              {filteredStudios.map((studio) => <option key={studio.id} value={studio.id}>{studio.name}</option>)}
+            </select>
+
+            {activeList !== 'queue' && (
+              <select value={courseFilter} onChange={(e) => setCourseFilter(e.target.value)}>
+                <option value="">Все кружки</option>
+                {filteredCourses.map((course) => <option key={course.id} value={course.id}>{course.name}</option>)}
+              </select>
+            )}
+            {activeList === 'voucher' && (
+              <select value={messageTagFilter} onChange={(e) => setMessageTagFilter(e.target.value)}>
+                <option value="">Все пометки</option>
+                <option value="qr">QR</option>
+                <option value="reminder">Напоминание</option>
+              </select>
+            )}
+            <button type="button" onClick={() => setSelectionMode((v) => !v)}>
+              {selectionMode ? 'Скрыть выбор' : 'Выбрать'}
+            </button>
+            {selectionMode && (
+              <>
+                <button type="button" onClick={selectAllVisible}>Выбрать всех</button>
+                <button type="button" onClick={clearVisibleSelection}>Отменить выбор всех</button>
+              </>
+            )}
+            {selectionMode && activeList === 'voucher' && (
+              <>
+                <button type="button" onClick={() => applyVoucherTag('qr')} disabled={!selectedRows.length}>Добавить пометку QR</button>
+                <button type="button" onClick={() => applyVoucherTag('reminder')} disabled={!selectedRows.length}>Добавить пометку Напоминание</button>
+                <button type="button" onClick={() => applyVoucherTag('')} disabled={!selectedRows.length}>Удалить пометку</button>
+                <select value={selectedCourseForBulk} onChange={(e) => setSelectedCourseForBulk(e.target.value)}>
+                  <option value="">Выбрать кружок</option>
+                  {selectableVoucherCourses.map((course) => (
+                    <option key={course.id} value={course.id}>{course.name}</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={applySelectedCourseToVouchers}
+                  disabled={!selectedRows.length || !selectedCourseForBulk}
+                >
+                  Назначить кружок
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBulkEditOpen(true)}
+                  disabled={!selectedRows.length}
+                >
+                  Изменить
+                </button>
+              </>
+            )}
+          </div>
+
+          <div className="children-toolbar-right">
+            <input
+              placeholder="Поиск"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="children-search"
+            />
+            {activeList === 'queue' && (
+              <button
+                onClick={async () => {
+                  if (!sortedQueueRows.length) return;
+                  setQueueRefreshing(true);
+                  setQueueRefreshOpen(true);
+                  setQueueRefreshResult(null);
+                  setQueueRefreshProgress(6);
+                  try {
+                    const ids = sortedQueueRows.map((x) => x.id);
+                    const res = await api.refreshQueueChildren({ ids });
+                    setQueueRefreshResult(res || null);
+                    await loadQueueChildren();
+                    setError('');
+                    setQueueRefreshProgress(100);
+                    if (res?.failed) {
+                      setError(`Обновлено: ${res.updated}, ошибок: ${res.failed}`);
+                    }
+                  } catch (e) {
+                    setError(e?.message || 'Не удалось обновить очередь.');
+                  } finally {
+                    window.setTimeout(() => setQueueRefreshing(false), 260);
+                  }
+                }}
+                disabled={queueRefreshing || !sortedQueueRows.length}
+              >
+                {queueRefreshing ? 'Обновление...' : 'Обновить очередь'}
+              </button>
+            )}
+            <button onClick={() => { setImportResult(null); setImportSource('excel'); setImportOpen(true); }}>Импорт</button>
+            <button onClick={() => setReportOpen(true)}>Отчет</button>
+            <button
+              className="danger"
+              onClick={async () => {
+                if (!window.confirm('Удалить всех детей, очередь и связанные данные?')) return;
+                try {
+                  await api.clearAllChildren();
+                  setSelectedChild(null);
+                  setSelectedQueueChild(null);
+                  setSelectedIds({});
+                  await loadChildren();
+                  await loadQueueChildren();
+                  await loadChildrenCounts();
+                } catch (e) {
+                  setError(e?.message || 'Не удалось удалить детей.');
+                }
+              }}
+            >
+              Удалить всех детей
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="panel children-list-wrap">
+        {activeList === 'queue' ? (
+          <table className="children-table queue-table">
+            <thead>
+              <tr>
+                {selectionMode && <th>✓</th>}
+                <th><button type="button" className="th-sort-btn" onClick={() => toggleQueueSort('cityName')}>Город {renderSortArrow(queueSort, 'cityName')}</button></th>
+                <th><button type="button" className="th-sort-btn" onClick={() => toggleQueueSort('studioName')}>Студия {renderSortArrow(queueSort, 'studioName')}</button></th>
+                <th><button type="button" className="th-sort-btn" onClick={() => toggleQueueSort('childFullName')}>ФИО ребенка {renderSortArrow(queueSort, 'childFullName')}</button></th>
+                <th><button type="button" className="th-sort-btn" onClick={() => toggleQueueSort('childAge')}>Возраст {renderSortArrow(queueSort, 'childAge')}</button></th>
+                <th><button type="button" className="th-sort-btn" onClick={() => toggleQueueSort('phone')}>Номер телефона {renderSortArrow(queueSort, 'phone')}</button></th>
+                <th><button type="button" className="th-sort-btn" onClick={() => toggleQueueSort('queueCategory')}>Категория очереди {renderSortArrow(queueSort, 'queueCategory')}</button></th>
+                <th><button type="button" className="th-sort-btn" onClick={() => toggleQueueSort('queueDate')}>Дата очереди {renderSortArrow(queueSort, 'queueDate')}</button></th>
+                <th><button type="button" className="th-sort-btn" onClick={() => toggleQueueSort('queueNumber')}>Номер очереди {renderSortArrow(queueSort, 'queueNumber')}</button></th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedQueueRows.map((row) => (
+                <tr key={row.id} className="child-row" onClick={() => setSelectedQueueChild(row)}>
+                  {selectionMode && (
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <input type="checkbox" checked={!!selectedIds[row.id]} onChange={(e) => toggleSelected(row.id, e.target.checked)} />
+                    </td>
+                  )}
+                  <td>{row.cityName || '—'}</td>
+                  <td>{row.studioName || '—'}</td>
+                  <td>{row.childFullName}</td>
+                  <td>{row.childAge ?? '—'}</td>
+                  <td>{row.phone}</td>
+                  <td>{row.queueCategory || '—'}</td>
+                  <td>{row.queueDate || '—'}</td>
+                  <td>{formatQueueNumber(row.queueNumber)}</td>
+                  <td onClick={(e) => e.stopPropagation()}>
+                    <div className="icon-actions">
+                      {String(row.queueNumber || '').trim().toUpperCase() === 'ВАУЧЕР' && (
+                        <button className="icon-btn convert" title="Перевести в ваучеры" onClick={() => openQueueTransfer(row)}>⇄</button>
+                      )}
+                      <button className="icon-btn" title="Редактировать" onClick={() => setQueueModalData(row)}>⋯</button>
+                      <button
+                        className="icon-btn danger"
+                        title="Удалить"
+                        onClick={async () => {
+                          if (!window.confirm('Удалить ребенка из очереди?')) return;
+                          try {
+                            await api.deleteQueueChild(row.id);
+                            if (selectedQueueChild?.id === row.id) setSelectedQueueChild(null);
+                            await loadQueueChildren();
+                          } catch (e) {
+                            setError(e?.message || 'Не удалось удалить запись очереди.');
+                          }
+                        }}
+                      >
+                        🗑
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {!sortedQueueRows.length && (
+                <tr><td colSpan={selectionMode ? 10 : 9}>Нет данных</td></tr>
+              )}
+            </tbody>
+          </table>
+        ) : (
+          <table className="children-table">
+            <thead>
+              <tr>
+                {selectionMode && <th>✓</th>}
+                <th><button type="button" className="th-sort-btn" onClick={() => toggleChildrenSort('cityName')}>Город {renderSortArrow(childrenSort, 'cityName')}</button></th>
+                <th><button type="button" className="th-sort-btn" onClick={() => toggleChildrenSort('studioName')}>Студия {renderSortArrow(childrenSort, 'studioName')}</button></th>
+                <th><button type="button" className="th-sort-btn" onClick={() => toggleChildrenSort('childName')}>ФИО ребенка {renderSortArrow(childrenSort, 'childName')}</button></th>
+                <th><button type="button" className="th-sort-btn" onClick={() => toggleChildrenSort('childAge')}>Возраст {renderSortArrow(childrenSort, 'childAge')}</button></th>
+                <th><button type="button" className="th-sort-btn" onClick={() => toggleChildrenSort('courseName')}>Кружок {renderSortArrow(childrenSort, 'courseName')}</button></th>
+                <th><button type="button" className="th-sort-btn" onClick={() => toggleChildrenSort('groupName')}>Группа {renderSortArrow(childrenSort, 'groupName')}</button></th>
+                {activeList === 'paid' && <th><button type="button" className="th-sort-btn" onClick={() => toggleChildrenSort('lastPaymentDate')}>Дата последней оплаты {renderSortArrow(childrenSort, 'lastPaymentDate')}</button></th>}
+                <th><button type="button" className="th-sort-btn" onClick={() => toggleChildrenSort('parentPhone')}>Номер телефона {renderSortArrow(childrenSort, 'parentPhone')}</button></th>
+                {activeList === 'voucher' && <th><button type="button" className="th-sort-btn" onClick={() => toggleChildrenSort('messageTag')}>Пометка {renderSortArrow(childrenSort, 'messageTag')}</button></th>}
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedRows.map((row) => (
+                <tr key={row.id} className="child-row" onClick={() => openProfile(row)}>
+                  {selectionMode && (
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <input type="checkbox" checked={!!selectedIds[row.id]} onChange={(e) => toggleSelected(row.id, e.target.checked)} />
+                    </td>
+                  )}
+                  <td>{row.cityName}</td>
+                  <td>{row.studioName}</td>
+                  <td>{row.childName}</td>
+                  <td>{row.childAge}</td>
+                  <td>{row.courseName}</td>
+                  <td>{row.groupName || '—'}</td>
+                  {activeList === 'paid' && <td>{row.lastPaymentDate || '—'}</td>}
+                  <td>{row.parentPhone}</td>
+                  {activeList === 'voucher' && (
+                    <td>
+                      {row.messageTag ? <span className={`tag-chip ${row.messageTag}`}>{messageTagLabel(row.messageTag)}</span> : '—'}
+                    </td>
+                  )}
+                  <td onClick={(e) => e.stopPropagation()}>
+                    <div className="icon-actions">
+                      <button className="icon-btn" title="Редактировать" onClick={() => openEdit(row.id)}>⋯</button>
+                      <button
+                        className="icon-btn danger"
+                        title="Удалить"
+                        onClick={async () => {
+                          if (!window.confirm('Удалить ребенка?')) return;
+                          try {
+                            await api.deleteChild(row.id);
+                            await loadChildren();
+                          } catch (e) {
+                            setError(e?.message || 'Не удалось удалить ребенка.');
+                          }
+                        }}
+                      >
+                        🗑
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {!sortedRows.length && (
+                <tr><td colSpan={selectionMode ? (activeList === 'paid' ? 10 : 10) : (activeList === 'paid' ? 9 : 9)}>Нет данных</td></tr>
+              )}
+            </tbody>
+          </table>
+        )}
+      </div>
+      <div className="children-summary">
+        Итого в списке: {activeList === 'queue' ? sortedQueueRows.length : sortedRows.length}
+      </div>
+
+      {selectedChild && (
+        <Modal title="Карточка ребенка" onClose={() => setSelectedChild(null)}>
+          <div className={`child-sheet ${selectedChild.type === 'paid' ? 'paid' : 'voucher'}`}>
+            <div className="child-sheet-head">
+              <div className="child-sheet-name">{selectedChild.profile?.childFullName || '—'}</div>
+              <span className={`child-sheet-type ${selectedChild.type === 'paid' ? 'paid' : 'voucher'}`}>
+                {selectedChild.type === 'paid' ? 'Платно' : 'Ваучер'}
+              </span>
+            </div>
+            <div className="child-sheet-grid">
+              <div className="child-sheet-row"><span>Город</span><b>{selectedChild._meta?.cityName || '—'}</b></div>
+              <div className="child-sheet-row"><span>Студия</span><b>{selectedChild._meta?.studioName || '—'}</b></div>
+              <div className="child-sheet-row"><span>Кружок</span><b>{selectedChild._meta?.courseName || '—'}</b></div>
+              <div className="child-sheet-row"><span>Группа</span><b>{selectedChild._meta?.groupName || '—'}</b></div>
+              <div className="child-sheet-row"><span>ИИН ребенка</span><b>{selectedChild.profile?.childIIN || '—'}</b></div>
+              <div className="child-sheet-row"><span>Дата рождения</span><b>{selectedChild.profile?.childBirthDate || '—'}</b></div>
+              <div className="child-sheet-row"><span>Возраст</span><b>{selectedChild.profile?.childAge ?? '—'}</b></div>
+              <div className="child-sheet-row"><span>Телефон родителя</span><b>{selectedChild.profile?.parentPhone || '—'}</b></div>
+              <div className="child-sheet-row"><span>ФИО родителя</span><b>{selectedChild.profile?.parentFullName || '—'}</b></div>
+              {selectedChild.type === 'voucher' && <div className="child-sheet-row"><span>Пометка</span><b>{messageTagLabel(selectedChild.messageTag)}</b></div>}
+              <div className="child-sheet-row"><span>Дата зачисления</span><b>{selectedChild.profile?.enrollmentDate || '—'}</b></div>
+            </div>
+            {selectedChild.type === 'paid' && (
+              <div className="child-sheet-grid" style={{ marginTop: 10 }}>
+                <div className="child-sheet-row"><span>Старт оплаты</span><b>{selectedChild.profile?.paymentStartDate || '—'}</b></div>
+                <div className="child-sheet-row"><span>Последняя оплата</span><b>{selectedChild.profile?.lastPaymentDate || '—'}</b></div>
+                <div className="child-sheet-row"><span>Уроков после оплаты</span><b>{selectedChild.profile?.lessonsCount ?? '—'}</b></div>
+                <div className="child-sheet-row"><span>Текущий цикл</span><b>{selectedChild.profile?.lessonsCount ?? 0}/8</b></div>
+              </div>
+            )}
+            {selectedChild.type === 'voucher' && (
+              <div className="child-sheet-grid" style={{ marginTop: 10 }}>
+                <div className="child-sheet-row"><span>ИИН родителя</span><b>{selectedChild.profile?.parentIIN || '—'}</b></div>
+                <div className="child-sheet-row"><span>Email родителя</span><b>{selectedChild.profile?.parentEmail || '—'}</b></div>
+                <label className="child-sheet-row full">
+                  <span>Редактировать пометку</span>
+                  <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                    <select
+                      value={selectedChildTagDraft}
+                      onChange={(e) => setSelectedChildTagDraft(e.target.value)}
+                      style={{ minWidth: 180 }}
+                    >
+                      <option value="">Без пометки</option>
+                      <option value="qr">QR</option>
+                      <option value="reminder">Напоминание</option>
+                    </select>
+                    <button
+                      type="button"
+                      onClick={saveSelectedChildTag}
+                      disabled={selectedChildTagSaving}
+                    >
+                      {selectedChildTagSaving ? 'Сохранение...' : 'Сохранить пометку'}
+                    </button>
+                  </div>
+                </label>
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {selectedQueueChild && (
+        <Modal title="Карточка очередника" onClose={() => setSelectedQueueChild(null)}>
+          <div className="child-sheet queue">
+            <div className="child-sheet-head">
+              <div className="child-sheet-name">{selectedQueueChild.childFullName}</div>
+              <span className="child-sheet-type queue">Очередь</span>
+            </div>
+            <div className="child-sheet-grid">
+              <div className="child-sheet-row"><span>Возраст</span><b>{selectedQueueChild.childAge ?? '—'}</b></div>
+              <div className="child-sheet-row"><span>ИИН ребенка</span><b>{selectedQueueChild.childIIN}</b></div>
+              <div className="child-sheet-row"><span>Дата рождения</span><b>{selectedQueueChild.childBirthDate || '—'}</b></div>
+              <div className="child-sheet-row"><span>ФИО родителя</span><b>{selectedQueueChild.parentFullName}</b></div>
+              <div className="child-sheet-row"><span>ИИН родителя</span><b>{selectedQueueChild.parentIIN}</b></div>
+              <div className="child-sheet-row"><span>Телефон</span><b>{selectedQueueChild.phone}</b></div>
+              <div className="child-sheet-row"><span>Город</span><b>{selectedQueueChild.cityName || '—'}</b></div>
+              <div className="child-sheet-row"><span>Студия</span><b>{selectedQueueChild.studioName || '—'}</b></div>
+              <div className="child-sheet-row"><span>Номер очереди</span><b>{formatQueueNumber(selectedQueueChild.queueNumber)}</b></div>
+              <div className="child-sheet-row"><span>Дата постановки</span><b>{selectedQueueChild.queueDate}</b></div>
+              <div className="child-sheet-row"><span>Категория очереди</span><b>{selectedQueueChild.queueCategory}</b></div>
+              <div className="child-sheet-row full"><span>Комментарий</span><b>{selectedQueueChild.comment || '—'}</b></div>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {queueModalData && (
+        <Modal title={queueModalData.id ? 'Редактирование очередника' : 'Добавление очередника'} onClose={() => setQueueModalData(null)}>
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              try {
+                await api.saveQueueChild(queueModalData);
+                setQueueModalData(null);
+                await loadQueueChildren();
+                setError('');
+              } catch (err) {
+                setError(err?.message || 'Не удалось сохранить очередника.');
+              }
+            }}
+          >
+            <div className="form-grid">
+              <label>
+                <div style={{ marginBottom: 6, color: '#97a7c3' }}>Город</div>
+                <select
+                  value={queueModalData.cityId || ''}
+                  onChange={(e) => setQueueModalData((v) => ({ ...v, cityId: e.target.value, studioId: '' }))}
+                  required
+                >
+                  <option value="">Выберите город</option>
+                  {cities.map((city) => <option key={city.id} value={city.id}>{city.name}</option>)}
+                </select>
+              </label>
+              <label>
+                <div style={{ marginBottom: 6, color: '#97a7c3' }}>Студия</div>
+                <select
+                  value={queueModalData.studioId || ''}
+                  onChange={(e) => setQueueModalData((v) => ({ ...v, studioId: e.target.value }))}
+                  required
+                >
+                  <option value="">Выберите студию</option>
+                  {studios
+                    .filter((s) => !queueModalData.cityId || Number(s.cityId) === Number(queueModalData.cityId))
+                    .map((studio) => <option key={studio.id} value={studio.id}>{studio.name}</option>)}
+                </select>
+              </label>
+              <label>
+                <div style={{ marginBottom: 6, color: '#97a7c3' }}>ФИО ребенка</div>
+                <input
+                  value={queueModalData.childFullName || ''}
+                  onChange={(e) => setQueueModalData((v) => ({ ...v, childFullName: e.target.value }))}
+                  required
+                />
+              </label>
+              <label>
+                <div style={{ marginBottom: 6, color: '#97a7c3' }}>ИИН ребенка</div>
+                <input
+                  value={queueModalData.childIIN || ''}
+                  onChange={(e) => setQueueModalData((v) => ({ ...v, childIIN: e.target.value }))}
+                  required
+                />
+              </label>
+              <label>
+                <div style={{ marginBottom: 6, color: '#97a7c3' }}>Дата рождения (из ИИН ребенка)</div>
+                <input value={queueBirthDate || '—'} readOnly />
+              </label>
+              <label>
+                <div style={{ marginBottom: 6, color: '#97a7c3' }}>Возраст (из ИИН ребенка)</div>
+                <input value={queueAge || '—'} readOnly />
+              </label>
+              <label>
+                <div style={{ marginBottom: 6, color: '#97a7c3' }}>ФИО родителя</div>
+                <input
+                  value={queueModalData.parentFullName || ''}
+                  onChange={(e) => setQueueModalData((v) => ({ ...v, parentFullName: e.target.value }))}
+                  required
+                />
+              </label>
+              <label>
+                <div style={{ marginBottom: 6, color: '#97a7c3' }}>ИИН родителя</div>
+                <input
+                  value={queueModalData.parentIIN || ''}
+                  onChange={(e) => setQueueModalData((v) => ({ ...v, parentIIN: e.target.value }))}
+                  required
+                />
+              </label>
+              <label>
+                <div style={{ marginBottom: 6, color: '#97a7c3' }}>Телефон</div>
+                <input
+                  value={queueModalData.phone || ''}
+                  onChange={(e) => setQueueModalData((v) => ({ ...v, phone: e.target.value }))}
+                  required
+                />
+              </label>
+              <label>
+                <div style={{ marginBottom: 6, color: '#97a7c3' }}>Дата постановки</div>
+                <input
+                  type="date"
+                  value={queueModalData.queueDate || ''}
+                  onChange={(e) => setQueueModalData((v) => ({ ...v, queueDate: e.target.value }))}
+                  required={String(queueModalData.queueNumber || '').trim().toUpperCase() !== 'ВАУЧЕР'}
+                />
+              </label>
+              <label>
+                <div style={{ marginBottom: 6, color: '#97a7c3' }}>Номер очереди</div>
+                <input
+                  type="text"
+                  value={queueModalData.queueNumber || ''}
+                  onChange={(e) => setQueueModalData((v) => ({ ...v, queueNumber: e.target.value }))}
+                  required
+                />
+              </label>
+              <label>
+                <div style={{ marginBottom: 6, color: '#97a7c3' }}>Категория очереди</div>
+                <input
+                  value={queueModalData.queueCategory || ''}
+                  onChange={(e) => setQueueModalData((v) => ({ ...v, queueCategory: e.target.value }))}
+                  required={String(queueModalData.queueNumber || '').trim().toUpperCase() !== 'ВАУЧЕР'}
+                />
+              </label>
+              <label className="full">
+                <div style={{ marginBottom: 6, color: '#97a7c3' }}>Комментарий</div>
+                <textarea
+                  rows={3}
+                  value={queueModalData.comment || ''}
+                  onChange={(e) => setQueueModalData((v) => ({ ...v, comment: e.target.value }))}
+                />
+              </label>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+              <button type="button" onClick={() => setQueueModalData(null)}>Отмена</button>
+              <button className="primary" type="submit">Сохранить</button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {queueToVoucherData && (
+        <Modal title="Перевод из очереди в ваучеры" onClose={() => setQueueToVoucherData(null)}>
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              try {
+                await api.saveChild({
+                  studioId: Number(queueToVoucherData.studioId),
+                  courseId: Number(queueToVoucherData.courseId),
+                  groupId: queueToVoucherData.groupId ? Number(queueToVoucherData.groupId) : null,
+                  type: 'voucher',
+                  profile: {
+                    childFullName: queueToVoucherData.childFullName,
+                    childIIN: queueToVoucherData.childIIN,
+                    childBirthDate: transferBirthDate || '',
+                    manualAge: null,
+                    parentPhone: queueToVoucherData.parentPhone,
+                    parentFullName: queueToVoucherData.parentFullName,
+                    parentIIN: queueToVoucherData.parentIIN,
+                    parentEmail: queueToVoucherData.parentEmail || '',
+                    enrollmentDate: queueToVoucherData.enrollmentDate,
+                    voucherNumber: queueToVoucherData.sourceQueueNumber || 'ВАУЧЕР',
+                    voucherEndDate: queueToVoucherData.enrollmentDate
+                  }
+                });
+                await api.deleteQueueChild(queueToVoucherData.queueId);
+                setQueueToVoucherData(null);
+                await loadAll();
+                await loadQueueChildren();
+                setActiveList('voucher');
+                setError('');
+              } catch (e1) {
+                setError(e1?.message || 'Не удалось перевести ребенка в ваучеры.');
+              }
+            }}
+          >
+            <div className="form-grid">
+              <label>
+                <div style={{ marginBottom: 6, color: '#97a7c3' }}>Студия</div>
+                <select
+                  value={queueToVoucherData.studioId || ''}
+                  onChange={(e) => setQueueToVoucherData((v) => ({ ...v, studioId: e.target.value, courseId: '', groupId: '' }))}
+                  required
+                >
+                  <option value="">Выберите студию</option>
+                  {studios
+                    .filter((s) => !queueToVoucherData.cityId || Number(s.cityId) === Number(queueToVoucherData.cityId))
+                    .map((studio) => <option key={studio.id} value={studio.id}>{studio.name}</option>)}
+                </select>
+              </label>
+              <label>
+                <div style={{ marginBottom: 6, color: '#97a7c3' }}>Кружок</div>
+                <select
+                  value={queueToVoucherData.courseId || ''}
+                  onChange={(e) => setQueueToVoucherData((v) => ({ ...v, courseId: e.target.value, groupId: '' }))}
+                  required
+                >
+                  <option value="">Выберите кружок</option>
+                  {transferCourses.map((course) => <option key={course.id} value={course.id}>{course.name}</option>)}
+                </select>
+              </label>
+              <label>
+                <div style={{ marginBottom: 6, color: '#97a7c3' }}>Группа</div>
+                <select
+                  value={queueToVoucherData.groupId || ''}
+                  onChange={(e) => setQueueToVoucherData((v) => ({ ...v, groupId: e.target.value }))}
+                >
+                  <option value="">Без группы</option>
+                  {transferGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+                </select>
+              </label>
+              <label>
+                <div style={{ marginBottom: 6, color: '#97a7c3' }}>ФИО ребенка</div>
+                <input
+                  value={queueToVoucherData.childFullName || ''}
+                  onChange={(e) => setQueueToVoucherData((v) => ({ ...v, childFullName: e.target.value }))}
+                  required
+                />
+              </label>
+              <label>
+                <div style={{ marginBottom: 6, color: '#97a7c3' }}>ИИН ребенка</div>
+                <input
+                  value={queueToVoucherData.childIIN || ''}
+                  onChange={(e) => setQueueToVoucherData((v) => ({ ...v, childIIN: e.target.value }))}
+                  required
+                />
+              </label>
+              <label>
+                <div style={{ marginBottom: 6, color: '#97a7c3' }}>Дата рождения (из ИИН)</div>
+                <input value={transferBirthDate || '—'} readOnly />
+              </label>
+              <label>
+                <div style={{ marginBottom: 6, color: '#97a7c3' }}>Возраст (из ИИН)</div>
+                <input value={transferAge || '—'} readOnly />
+              </label>
+              <label>
+                <div style={{ marginBottom: 6, color: '#97a7c3' }}>Телефон родителя</div>
+                <input
+                  value={queueToVoucherData.parentPhone || ''}
+                  onChange={(e) => setQueueToVoucherData((v) => ({ ...v, parentPhone: e.target.value }))}
+                  required
+                />
+              </label>
+              <label>
+                <div style={{ marginBottom: 6, color: '#97a7c3' }}>ФИО родителя</div>
+                <input
+                  value={queueToVoucherData.parentFullName || ''}
+                  onChange={(e) => setQueueToVoucherData((v) => ({ ...v, parentFullName: e.target.value }))}
+                  required
+                />
+              </label>
+              <label>
+                <div style={{ marginBottom: 6, color: '#97a7c3' }}>ИИН родителя</div>
+                <input
+                  value={queueToVoucherData.parentIIN || ''}
+                  onChange={(e) => setQueueToVoucherData((v) => ({ ...v, parentIIN: e.target.value }))}
+                  required
+                />
+              </label>
+              <label>
+                <div style={{ marginBottom: 6, color: '#97a7c3' }}>Email родителя</div>
+                <input
+                  value={queueToVoucherData.parentEmail || ''}
+                  onChange={(e) => setQueueToVoucherData((v) => ({ ...v, parentEmail: e.target.value }))}
+                />
+              </label>
+              <label>
+                <div style={{ marginBottom: 6, color: '#97a7c3' }}>Дата зачисления</div>
+                <input
+                  type="date"
+                  value={queueToVoucherData.enrollmentDate || ''}
+                  onChange={(e) => setQueueToVoucherData((v) => ({ ...v, enrollmentDate: e.target.value }))}
+                  required
+                />
+              </label>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 14 }}>
+              <div style={{ color: '#97a7c3', fontSize: 13 }}>
+                Очередь: {formatQueueNumber(queueToVoucherData.sourceQueueNumber)}
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button type="button" onClick={() => setQueueToVoucherData(null)}>Отмена</button>
+                <button className="primary" type="submit">Перевести в ваучеры</button>
+              </div>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {modalData && (
+        <ChildModal
+          data={modalData}
+          studios={studios}
+          courses={courses}
+          groups={groups}
+          onClose={() => setModalData(null)}
+          onSubmit={async (payload) => {
+            try {
+              await api.saveChild(payload);
+              setModalData(null);
+              await loadAll();
+              setError('');
+            } catch (e) {
+              setError(e?.message || 'Не удалось сохранить ребенка.');
+            }
+          }}
+        />
+      )}
+
+      {reportOpen && (
+        <Modal title="Настройки отчета" onClose={() => setReportOpen(false)}>
+          <div className="form-grid">
+            {getReportFieldsByList(activeList).map((f) => (
+              <label key={f.key}>
+                <input
+                  type="checkbox"
+                  checked={reportSelected.includes(f.key)}
+                  onChange={(e) => {
+                    if (e.target.checked) {
+                      setReportSelected((prev) => [...prev, f.key]);
+                    } else {
+                      setReportSelected((prev) => prev.filter((x) => x !== f.key));
+                    }
+                  }}
+                />{' '}
+                {f.label}
+              </label>
+            ))}
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+            <button onClick={() => exportReport('xlsx')}>Excel</button>
+            <button className="primary" onClick={() => exportReport('pdf')}>PDF</button>
+          </div>
+        </Modal>
+      )}
+
+      {importOpen && (
+        <Modal title={`Импорт: ${activeListLabel}`} onClose={() => setImportOpen(false)}>
+          {activeList === 'voucher' && (
+            <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+              <button
+                type="button"
+                className={importSource === 'excel' ? 'primary' : ''}
+                onClick={() => setImportSource('excel')}
+              >
+                Excel
+              </button>
+              <button
+                type="button"
+                className={importSource === 'damubala' ? 'primary' : ''}
+                onClick={() => setImportSource('damubala')}
+              >
+                Damubala
+              </button>
+            </div>
+          )}
+
+          {activeList === 'voucher' && importSource === 'damubala' ? (
+            <div>
+              <div style={{ marginTop: 6, color: '#97a7c3', fontSize: 13 }}>
+                Импорт детей из Damubala по выбранным заявкам. Город, студия и кружок будут созданы автоматически из данных заявки.
+              </div>
+              <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
+                <button
+                  className="primary"
+                  type="button"
+                  onClick={() => {
+                    setImportOpen(false);
+                    openDamubalaSyncModal();
+                  }}
+                  disabled={damubalaSyncing}
+                >
+                  {damubalaSyncing ? 'Подключение...' : 'Импортировать из Damubala'}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="import-actions">
+                <button onClick={downloadImportTemplate} disabled={importing}>Скачать шаблон</button>
+                <button className="primary" onClick={() => importInputRef.current?.click()} disabled={importing}>
+                  {importing ? 'Импорт...' : 'Загрузить Excel'}
+                </button>
+                <input
+                  ref={importInputRef}
+                  type="file"
+                  accept=".xlsx,.xls"
+                  style={{ display: 'none' }}
+                  onChange={(e) => handleImportFile(e.target.files?.[0])}
+                />
+              </div>
+              <div style={{ marginTop: 10, color: '#97a7c3', fontSize: 13 }}>
+                Используйте шаблон для вкладки «{activeListLabel}», заполните строки и загрузите файл обратно.
+              </div>
+              {importResult && (
+                <div className="panel" style={{ marginTop: 12 }}>
+                  <div><b>Успешно:</b> {importResult.success}</div>
+                  <div><b>Ошибок:</b> {importResult.failed}</div>
+                  {!!importResult.errors?.length && (
+                    <div style={{ marginTop: 8, color: '#ff9aa5' }}>
+                      {importResult.errors.map((err) => <div key={err}>{err}</div>)}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </Modal>
+      )}
+
+      {bulkEditOpen && (
+        <Modal title="Изменение выбранных ваучеров" onClose={() => setBulkEditOpen(false)}>
+          <div className="form-grid">
+            <label>
+              <div style={{ marginBottom: 6, color: '#97a7c3' }}>Город</div>
+              <select
+                value={bulkEditData.cityId}
+                onChange={(e) => setBulkEditData((v) => ({ ...v, cityId: e.target.value, studioId: '', courseId: '' }))}
+              >
+                <option value="">Не менять</option>
+                {cities.map((city) => <option key={city.id} value={city.id}>{city.name}</option>)}
+              </select>
+            </label>
+            <label>
+              <div style={{ marginBottom: 6, color: '#97a7c3' }}>Студия</div>
+              <select
+                value={bulkEditData.studioId}
+                onChange={(e) => setBulkEditData((v) => ({ ...v, studioId: e.target.value, courseId: '' }))}
+              >
+                <option value="">Не менять</option>
+                {studios
+                  .filter((studio) => !bulkEditData.cityId || Number(studio.cityId) === Number(bulkEditData.cityId))
+                  .map((studio) => <option key={studio.id} value={studio.id}>{studio.name}</option>)}
+              </select>
+            </label>
+            <label>
+              <div style={{ marginBottom: 6, color: '#97a7c3' }}>Кружок</div>
+              <select
+                value={bulkEditData.courseId}
+                onChange={(e) => setBulkEditData((v) => ({ ...v, courseId: e.target.value }))}
+              >
+                <option value="">Не менять</option>
+                {courses
+                  .filter((course) => !bulkEditData.studioId || Number(course.studioId) === Number(bulkEditData.studioId))
+                  .map((course) => <option key={course.id} value={course.id}>{course.name}</option>)}
+              </select>
+            </label>
+            <label>
+              <div style={{ marginBottom: 6, color: '#97a7c3' }}>Пометка</div>
+              <select
+                value={bulkEditData.messageTag}
+                onChange={(e) => setBulkEditData((v) => ({ ...v, messageTag: e.target.value }))}
+              >
+                <option value="">Не менять</option>
+                <option value="qr">QR</option>
+                <option value="reminder">Напоминание</option>
+              </select>
+            </label>
+            <label className="full">
+              <div style={{ marginBottom: 6, color: '#97a7c3' }}>Номер ваучера</div>
+              <input
+                value={bulkEditData.voucherNumber}
+                onChange={(e) => setBulkEditData((v) => ({ ...v, voucherNumber: e.target.value }))}
+                placeholder="Не менять"
+              />
+            </label>
+          </div>
+          <div style={{ marginTop: 12, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+            <div style={{ color: '#97a7c3' }}>Выбрано детей: {selectedRows.length}</div>
+            <button className="primary" type="button" onClick={applyBulkEditToSelectedVouchers}>
+              Применить изменения
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {damubalaSyncModalOpen && (
+        <Modal title="Синхронизация с Damubala" onClose={() => !damubalaSyncing && setDamubalaSyncModalOpen(false)}>
+          {!damubalaPreview && (
+            <div className="form-grid">
+              {damubalaSyncing && (
+                <div className="full queue-refresh-wrap" style={{ marginTop: 2 }}>
+                  <div className="queue-refresh-spinner" />
+                  <div className="queue-refresh-text">{damubalaSyncLoadingText || 'Загрузка данных...'}</div>
+                </div>
+              )}
+              {!damubalaSyncing && (
+                <div className="full" style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+                  <button className="primary" type="button" onClick={startDamubalaPreviewLoad}>
+                    Войти в Damubala и получить заявки
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {damubalaPreview && (
+            <div>
+              <div style={{ color: '#97a7c3', marginBottom: 10 }}>
+                Выберите номера заявок, детей из которых нужно импортировать.
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                <button type="button" onClick={() => selectAllDamubalaApplications(true)}>Выбрать все</button>
+                <button type="button" onClick={() => selectAllDamubalaApplications(false)}>Снять выбор</button>
+              </div>
+              <div className="panel" style={{ maxHeight: 300, overflow: 'auto', padding: 10 }}>
+                {(damubalaPreview.applications || []).map((app) => (
+                  <label key={app.applicationId} style={{ display: 'grid', gridTemplateColumns: '24px 1fr', gap: 8, marginBottom: 8 }}>
+                    <input
+                      type="checkbox"
+                      checked={!!damubalaSelectedApps[app.applicationId]}
+                      onChange={(e) => toggleDamubalaApplication(app.applicationId, e.target.checked)}
+                    />
+                    <div>
+                      <b>{app.applicationName || `Заявка #${app.applicationId}`}</b> • №{app.applicationId} • детей: {app.childrenCount}
+                      <div style={{ color: '#97a7c3', fontSize: 12, marginTop: 2 }}>
+                        Город: {app.cityName || '—'} • Студия: {app.studioName || '—'} • Кружок: {app.courseName || '—'}
+                      </div>
+                      {!!app.childNames?.length && (
+                        <div style={{ color: '#97a7c3', fontSize: 12, marginTop: 2 }}>
+                          {app.childNames.join(', ')}
+                        </div>
+                      )}
+                    </div>
+                  </label>
+                ))}
+                {!damubalaPreview.applications?.length && <div>Нет заявок с активными ваучерами.</div>}
+              </div>
+              {damubalaSyncing && (
+                <div className="queue-refresh-wrap" style={{ marginTop: 10 }}>
+                  <div className="queue-refresh-spinner" />
+                  <div className="queue-refresh-text">{damubalaSyncLoadingText || 'Импорт...'}</div>
+                </div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 12 }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDamubalaPreview(null);
+                    setDamubalaSelectedApps({});
+                  }}
+                  disabled={damubalaSyncing}
+                >
+                  Назад
+                </button>
+                <button className="primary" type="button" onClick={importSelectedDamubalaChildren} disabled={damubalaSyncing}>
+                  Импортировать выбранных детей
+                </button>
+              </div>
+            </div>
+          )}
+        </Modal>
+      )}
+
+      {queueRefreshOpen && (
+        <Modal title="Обновление очереди" onClose={() => setQueueRefreshOpen(false)}>
+          {queueRefreshing && (
+            <div className="queue-refresh-wrap">
+              <div className="queue-refresh-spinner" />
+              <div className="queue-refresh-text">Идет обновление очереди...</div>
+              <div className="queue-refresh-progress">
+                <div className="queue-refresh-progress-head">
+                  <span>Прогресс обновления</span>
+                  <b>{Math.min(100, Math.round(queueRefreshProgress))}%</b>
+                </div>
+                <div className="queue-refresh-track">
+                  <div className="queue-refresh-fill" style={{ width: `${Math.min(100, queueRefreshProgress)}%` }} />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {!queueRefreshing && queueRefreshResult && (
+            <div className="queue-refresh-result">
+              <div className="queue-refresh-stats">
+                Обработано: {queueRefreshResult.total}, обновлено: {queueRefreshResult.updated}, получили ваучер: {queueRefreshResult.voucherCount || 0}, ошибок: {queueRefreshResult.failed}
+              </div>
+              <div className="panel" style={{ marginTop: 10 }}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Ребенок</th>
+                      <th>ИИН</th>
+                      <th>Номер</th>
+                      <th>Дата постановки</th>
+                      <th>Категория</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {queueRefreshResult.items
+                      .filter((x) => x.status === 'ok')
+                      .map((item, idx) => (
+                        <tr key={`${item.id}-${idx}`}>
+                          <td>{item.childFullName || '—'}</td>
+                          <td>{item.iin}</td>
+                          <td>{formatQueueNumber(item.queueNumber)}</td>
+                          <td>{item.queueDate || '—'}</td>
+                          <td>{item.queueCategory || '—'}</td>
+                        </tr>
+                      ))}
+                    {!queueRefreshResult.items.some((x) => x.status === 'ok') && (
+                      <tr><td colSpan={5}>Нет обновленных детей</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="panel" style={{ marginTop: 10 }}>
+                <div style={{ marginBottom: 8, color: '#97a7c3' }}>Дети, у которых очередь пропала (получили ваучер)</div>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>ФИО ребенка</th>
+                      <th>Возраст</th>
+                      <th>Город</th>
+                      <th>Студия</th>
+                      <th>Номер очереди</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {queueRefreshResult.items
+                      .filter((x) => x.status === 'voucher')
+                      .map((item, idx) => (
+                        <tr key={`voucher-${item.id}-${idx}`}>
+                          <td>{item.childFullName || '—'}</td>
+                          <td>{item.childAge ?? '—'}</td>
+                          <td>{item.cityName || '—'}</td>
+                          <td>{item.studioName || '—'}</td>
+                          <td>ВАУЧЕР</td>
+                        </tr>
+                      ))}
+                    {!queueRefreshResult.items.some((x) => x.status === 'voucher') && (
+                      <tr><td colSpan={5}>Нет детей, получивших ваучер</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </Modal>
+      )}
+    </section>
+  );
+}
