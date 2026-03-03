@@ -2,9 +2,21 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@renderer/api';
 
 const QR_SELECTED_MODAL_KEY = 'studia.damubala.qr.selected-modal.v1';
+const QR_FULL_MODAL_MAP_KEY = 'studia.damubala.qr.map.v1';
 const QR_SELECTED_CHILD_KEY = 'studia.damubala.qr.selected.v1';
 const QR_LOGS_KEY = 'studia.damubala.qr.logs.v1';
 const QR_STATUS_KEY = 'studia.damubala.qr.status.v1';
+
+function getGlobalDamubalaCache() {
+  if (!window.__studiaDamubalaCache) {
+    window.__studiaDamubalaCache = {
+      qrByChild: {},
+      pinnedModal: null,
+      logs: []
+    };
+  }
+  return window.__studiaDamubalaCache;
+}
 
 function normalizePhone(phone) {
   const digits = String(phone || '').replace(/\D/g, '');
@@ -45,6 +57,7 @@ export default function DamubalaHelperPage() {
   const [qrStatusByChild, setQrStatusByChild] = useState({});
   const [processing, setProcessing] = useState(false);
   const [processingChildId, setProcessingChildId] = useState(null);
+  const [previewLoadingChildId, setPreviewLoadingChildId] = useState(null);
   const [passwordProcessing, setPasswordProcessing] = useState(false);
   const [log, setLog] = useState([]);
   const [qrProgress, setQrProgress] = useState(0);
@@ -60,14 +73,27 @@ export default function DamubalaHelperPage() {
 
   function loadCachedQrMap() {
     try {
-      const parsed = JSON.parse(window.localStorage.getItem(QR_SELECTED_MODAL_KEY) || 'null');
-      if (!parsed || typeof parsed !== 'object') return {};
       const now = Date.now();
-      const childId = Number(parsed?.childId || 0);
-      const value = parsed?.value;
-      const expiresAt = new Date(value?.expiresAt || '').getTime();
-      if (!childId || !Number.isFinite(expiresAt) || expiresAt <= now) return {};
-      return { [childId]: value };
+      const fullParsed = JSON.parse(window.localStorage.getItem(QR_FULL_MODAL_MAP_KEY) || '{}');
+      const fromFull = fullParsed && typeof fullParsed === 'object' ? fullParsed : {};
+      const selectedParsed = JSON.parse(window.localStorage.getItem(QR_SELECTED_MODAL_KEY) || 'null');
+      const selectedMap = {};
+      const selectedChildId = Number(selectedParsed?.childId || 0);
+      const selectedValue = selectedParsed?.value;
+      const selectedExpires = new Date(selectedValue?.expiresAt || '').getTime();
+      if (selectedChildId && selectedValue?.imageDataUrl && Number.isFinite(selectedExpires) && selectedExpires > now) {
+        selectedMap[selectedChildId] = selectedValue;
+      }
+
+      const merged = { ...fromFull, ...selectedMap };
+      const valid = {};
+      Object.entries(merged).forEach(([id, item]) => {
+        const expiresAt = new Date(item?.expiresAt || '').getTime();
+        if (item?.imageDataUrl && Number.isFinite(expiresAt) && expiresAt > now) {
+          valid[Number(id)] = item;
+        }
+      });
+      return valid;
     } catch {
       return {};
     }
@@ -105,7 +131,11 @@ export default function DamubalaHelperPage() {
     }));
     setChildren(normalized);
     const savedSelected = Number(window.localStorage.getItem(QR_SELECTED_CHILD_KEY) || 0);
-    const cachedModalMap = loadCachedQrMap();
+    const globalCache = getGlobalDamubalaCache();
+    const cachedModalMap = {
+      ...(globalCache.qrByChild || {}),
+      ...loadCachedQrMap()
+    };
     const cachedModalChildId = Number(Object.keys(cachedModalMap)[0] || 0);
     if (!selectedChildId && cachedModalChildId && normalized.some((row) => row.id === cachedModalChildId)) {
       setSelectedChildId(cachedModalChildId);
@@ -119,12 +149,20 @@ export default function DamubalaHelperPage() {
   }
 
   useEffect(() => {
-    const cachedModalMap = loadCachedQrMap();
+    const globalCache = getGlobalDamubalaCache();
+    const cachedModalMap = {
+      ...(globalCache.qrByChild || {}),
+      ...loadCachedQrMap()
+    };
     setQrByChild(cachedModalMap);
     const cachedModalChildId = Number(Object.keys(cachedModalMap)[0] || 0);
     const cachedModalValue = cachedModalChildId ? cachedModalMap[cachedModalChildId] : null;
-    if (cachedModalValue) setPinnedModal({ childId: cachedModalChildId, value: cachedModalValue });
-    setLog(loadCachedLogs());
+    if (globalCache.pinnedModal?.value) {
+      setPinnedModal(globalCache.pinnedModal);
+    } else if (cachedModalValue) {
+      setPinnedModal({ childId: cachedModalChildId, value: cachedModalValue });
+    }
+    setLog(globalCache.logs?.length ? globalCache.logs : loadCachedLogs());
     setQrStatusByChild(loadCachedStatuses());
     qrHydratedRef.current = true;
     logHydratedRef.current = true;
@@ -133,8 +171,24 @@ export default function DamubalaHelperPage() {
 
   useEffect(() => {
     if (!logHydratedRef.current) return;
-    window.localStorage.setItem(QR_LOGS_KEY, JSON.stringify((log || []).slice(-120)));
+    const sliced = (log || []).slice(-120);
+    getGlobalDamubalaCache().logs = sliced;
+    window.localStorage.setItem(QR_LOGS_KEY, JSON.stringify(sliced));
   }, [log]);
+
+  useEffect(() => {
+    const globalCache = getGlobalDamubalaCache();
+    globalCache.qrByChild = { ...(qrByChild || {}) };
+    try {
+      window.localStorage.setItem(QR_FULL_MODAL_MAP_KEY, JSON.stringify(globalCache.qrByChild || {}));
+    } catch {
+      // ignore quota and keep runtime cache
+    }
+  }, [qrByChild]);
+
+  useEffect(() => {
+    getGlobalDamubalaCache().pinnedModal = pinnedModal || null;
+  }, [pinnedModal]);
 
   useEffect(() => {
     if (!statusHydratedRef.current) {
@@ -171,11 +225,11 @@ export default function DamubalaHelperPage() {
   );
 
   const selectedQr = selectedChild ? qrByChild[selectedChild.id] : null;
-  const displayModal = selectedQr ? { childId: selectedChild?.id, value: selectedQr } : pinnedModal;
+  const displayModal = selectedChild
+    ? (selectedQr ? { childId: selectedChild?.id, value: selectedQr } : null)
+    : pinnedModal;
   const displayQr = displayModal?.value || null;
-  const displayChild = selectedChild?.id === displayModal?.childId
-    ? selectedChild
-    : sortedChildren.find((row) => row.id === displayModal?.childId) || null;
+  const displayChild = selectedChild || sortedChildren.find((row) => row.id === displayModal?.childId) || null;
   const remainingMs = displayQr?.expiresAt ? new Date(displayQr.expiresAt).getTime() - tick : 0;
   const hasQrCount = sortedChildren.filter((row) => qrStatusByChild[row.id] === 'has-qr').length;
   const noQrCount = sortedChildren.filter((row) => qrStatusByChild[row.id] === 'no-qr').length;
@@ -197,6 +251,37 @@ export default function DamubalaHelperPage() {
   function sortArrow(key) {
     if (sortState.key !== key) return '⇅';
     return sortState.direction === 'asc' ? '↑' : '↓';
+  }
+
+  async function ensurePreviewForChild(row) {
+    if (!row || qrByChild[row.id]?.imageDataUrl) return;
+    if (qrStatusByChild[row.id] !== 'has-qr') return;
+    if (!row.parentIIN || String(row.parentIIN || '').length !== 12) return;
+    try {
+      setPreviewLoadingChildId(row.id);
+      const modal = await api.buildDamubalaChildModal({
+        iin: row.parentIIN,
+        childName: row.childName,
+        defaultPassword1,
+        defaultPassword2
+      });
+      if (modal?.success && modal?.modalImageDataUrl) {
+        const value = {
+          imageDataUrl: modal.modalImageDataUrl,
+          qrDataUrl: modal?.item?.qrDataUrl || '',
+          generatedAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+          parentIIN: row.parentIIN,
+          parentPhone: row.parentPhone
+        };
+        setQrByChild((prev) => ({ ...prev, [row.id]: value }));
+        setPinnedModal({ childId: row.id, value });
+      }
+    } catch {
+      // ignore preview warm-up errors
+    } finally {
+      setPreviewLoadingChildId(null);
+    }
   }
 
   async function refreshPasswordsForList() {
@@ -246,19 +331,24 @@ export default function DamubalaHelperPage() {
     setQrProgress(6);
     setError('');
     setLog((prev) => [...prev, `Старт обновления QR: ${new Date().toLocaleString()}`]);
+    const targetChildren = sortedChildren.filter((row) => qrStatusByChild[row.id] !== 'no-qr');
 
     let success = 0;
     let failed = 0;
 
-    for (let idx = 0; idx < sortedChildren.length; idx += 1) {
-      const child = sortedChildren[idx];
+    for (let idx = 0; idx < targetChildren.length; idx += 1) {
+      const child = targetChildren[idx];
       setProcessingChildId(child.id);
       setSelectedChildId(child.id);
+      const cachedForChild = qrByChild[child.id];
+      if (cachedForChild?.imageDataUrl) {
+        setPinnedModal({ childId: child.id, value: cachedForChild });
+      }
       if (!child.parentIIN || child.parentIIN.length !== 12) {
         failed += 1;
-        setLog((prev) => [...prev, `Пропуск: ${child.childName} — нет валидного ИИН родителя`]);
+        setLog((prev) => [...prev, `Ошибка QR: ${child.childName} — нет валидного ИИН родителя`]);
         setQrStatusByChild((prev) => ({ ...prev, [child.id]: 'no-qr' }));
-        setQrProgress(Math.min(100, Math.round(((idx + 1) / Math.max(1, sortedChildren.length)) * 100)));
+        setQrProgress(Math.min(100, Math.round(((idx + 1) / Math.max(1, targetChildren.length)) * 100)));
         continue;
       }
 
@@ -273,6 +363,7 @@ export default function DamubalaHelperPage() {
         success += 1;
         const value = {
           imageDataUrl: modal.modalImageDataUrl,
+          qrDataUrl: modal?.item?.qrDataUrl || '',
           generatedAt: new Date().toISOString(),
           expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
           parentIIN: child.parentIIN,
@@ -280,6 +371,7 @@ export default function DamubalaHelperPage() {
         };
         setQrByChild((prev) => ({ ...prev, [child.id]: value }));
         setPinnedModal({ childId: child.id, value });
+        window.localStorage.setItem(QR_SELECTED_MODAL_KEY, JSON.stringify({ childId: child.id, value }));
         setQrStatusByChild((prev) => ({ ...prev, [child.id]: 'has-qr' }));
         setLog((prev) => [...prev, `QR обновлен: ${child.childName}`]);
       } else {
@@ -287,7 +379,7 @@ export default function DamubalaHelperPage() {
         setQrStatusByChild((prev) => ({ ...prev, [child.id]: 'no-qr' }));
         setLog((prev) => [...prev, `Ошибка QR: ${child.childName} — ${modal?.message || 'не удалось'}`]);
       }
-      setQrProgress(Math.min(100, Math.round(((idx + 1) / Math.max(1, sortedChildren.length)) * 100)));
+      setQrProgress(Math.min(100, Math.round(((idx + 1) / Math.max(1, targetChildren.length)) * 100)));
     }
 
     if (!selectedChildId && sortedChildren[0]?.id) setSelectedChildId(sortedChildren[0].id);
@@ -428,7 +520,15 @@ export default function DamubalaHelperPage() {
                     key={row.id}
                     className={`child-row${processingChildId === row.id ? ' damubala-row-processing' : ''}`}
                     style={{ cursor: 'pointer', background: row.id === selectedChildId ? 'rgba(72, 178, 255, 0.08)' : undefined }}
-                    onClick={() => setSelectedChildId(row.id)}
+                    onClick={async () => {
+                      setSelectedChildId(row.id);
+                      const rowQr = qrByChild[row.id];
+                      if (rowQr?.imageDataUrl) {
+                        setPinnedModal({ childId: row.id, value: rowQr });
+                      } else {
+                        await ensurePreviewForChild(row);
+                      }
+                    }}
                   >
                     <td onClick={(e) => e.stopPropagation()}>
                       <input
@@ -465,7 +565,11 @@ export default function DamubalaHelperPage() {
         <div className="panel damubala-preview-panel">
           <div className="damubala-list-title">QR модалка</div>
           {!displayQr?.imageDataUrl ? (
-            <div className="damubala-empty">Нажмите «Обновить QR», чтобы получить актуальную QR модалку.</div>
+            <div className="damubala-empty">
+              {selectedChild
+                ? (previewLoadingChildId === selectedChild.id ? 'Загружаем QR выбранного ребенка...' : 'Для выбранного ребенка QR пока нет. Обновите QR.')
+                : 'Нажмите «Обновить QR», чтобы получить актуальную QR модалку.'}
+            </div>
           ) : (
             <div className="damubala-preview-card">
               <img

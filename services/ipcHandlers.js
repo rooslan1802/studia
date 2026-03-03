@@ -445,10 +445,16 @@ function registerIpcHandlers() {
         const filePath = uniquePath(path.join(directoryPath, `${title}.png`));
         const qrDataUrl = String(file?.qrDataUrl || '');
         if (!qrDataUrl) continue;
-        const buffer = await renderModalPngBuffer({
-          qrDataUrl,
-          childName: file?.childLabel || file?.name || 'Ребенок'
-        });
+        let buffer = null;
+        const m = qrDataUrl.match(/^data:image\/[a-zA-Z0-9.+-]+;base64,(.+)$/);
+        if (m?.[1]) {
+          buffer = Buffer.from(m[1], 'base64');
+        } else {
+          buffer = await renderModalPngBuffer({
+            qrDataUrl,
+            childName: file?.childLabel || file?.name || 'Ребенок'
+          });
+        }
         if (!buffer) continue;
         fs.writeFileSync(filePath, buffer);
         savedPaths.push(filePath);

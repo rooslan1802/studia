@@ -1,8 +1,16 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@renderer/api';
 
 const BACKEND_URLS = ['http://localhost:47831', 'http://127.0.0.1:47831'];
 const QR_STATUS_KEY = 'studia.damubala.qr.status.v1';
+const WHATSAPP_LOGS_KEY = 'studia.whatsapp.logs.v1';
+
+function getGlobalWhatsAppLogsCache() {
+  if (!window.__studiaWhatsAppLogsCache) {
+    window.__studiaWhatsAppLogsCache = [];
+  }
+  return window.__studiaWhatsAppLogsCache;
+}
 
 function normalizePhone(phone) {
   const digits = String(phone || '').replace(/\D/g, '');
@@ -69,6 +77,15 @@ function qrStatusText(value) {
   return 'Не проверен';
 }
 
+function loadCachedWhatsAppLogs() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(WHATSAPP_LOGS_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed.slice(-300) : [];
+  } catch {
+    return [];
+  }
+}
+
 export default function WhatsAppPage() {
   const [status, setStatus] = useState({ connected: false, connecting: false, error: '' });
   const [showStatusPanel, setShowStatusPanel] = useState(false);
@@ -94,6 +111,7 @@ export default function WhatsAppPage() {
   const [result, setResult] = useState('');
   const [progress, setProgress] = useState({ total: 0, sent: 0, failed: 0, current: '' });
   const [log, setLog] = useState([]);
+  const logsHydratedRef = useRef(false);
 
   const [paidSort, setPaidSort] = useState({ key: 'childFullName', direction: 'asc' });
   const [qrSort, setQrSort] = useState({ key: 'childFullName', direction: 'asc' });
@@ -218,9 +236,19 @@ export default function WhatsAppPage() {
   useEffect(() => {
     loadStatus();
     loadRecipients();
+    const runtimeLogs = getGlobalWhatsAppLogsCache();
+    setLog(runtimeLogs.length ? runtimeLogs : loadCachedWhatsAppLogs());
+    logsHydratedRef.current = true;
     const timer = window.setInterval(loadStatus, 3000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (!logsHydratedRef.current) return;
+    const sliced = (log || []).slice(-300);
+    window.__studiaWhatsAppLogsCache = sliced;
+    window.localStorage.setItem(WHATSAPP_LOGS_KEY, JSON.stringify(sliced));
+  }, [log]);
 
   useEffect(() => {
     setSelectedPaid((prev) => {
@@ -266,7 +294,7 @@ export default function WhatsAppPage() {
     }
 
     setResult('');
-    setLog([]);
+    setLog((prev) => [...prev, `--- Старт рассылки (${modeName}) ${new Date().toLocaleString()} ---`]);
     setSending(true);
     setProgress({ total: rows.length, sent: 0, failed: 0, current: '' });
 
@@ -345,7 +373,7 @@ export default function WhatsAppPage() {
     }
 
     setResult('');
-    setLog([]);
+    setLog((prev) => [...prev, `--- Старт рассылки (QR) ${new Date().toLocaleString()} ---`]);
     setSending(true);
     setProgress({ total: selectedQrRecipients.length, sent: 0, failed: 0, current: '' });
 
@@ -640,6 +668,17 @@ export default function WhatsAppPage() {
 
         {!!log.length && (
           <div className="panel" style={{ marginTop: 12, maxHeight: 220, overflow: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setLog([]);
+                  window.localStorage.removeItem(WHATSAPP_LOGS_KEY);
+                }}
+              >
+                Очистить логи
+              </button>
+            </div>
             {log.map((line, index) => (
               <div key={`${line}-${index}`} style={{ fontSize: 13, marginBottom: 4 }}>{line}</div>
             ))}
