@@ -345,6 +345,29 @@ async function getDashboardData() {
       FROM Children
     `)
     .get();
+  const cityStructure = db
+    .prepare(`
+      SELECT
+        city.id AS cityId,
+        city.name AS cityName,
+        COUNT(ch.id) AS totalChildren,
+        SUM(CASE WHEN ch.type = 'voucher' THEN 1 ELSE 0 END) AS totalVouchers,
+        SUM(CASE WHEN ch.type = 'paid' THEN 1 ELSE 0 END) AS totalPaid
+      FROM Cities city
+      LEFT JOIN Studios st ON st.cityId = city.id
+      LEFT JOIN Children ch ON ch.studioId = st.id
+      GROUP BY city.id, city.name
+      HAVING COUNT(ch.id) > 0
+      ORDER BY COUNT(ch.id) DESC, city.name COLLATE NOCASE
+    `)
+    .all()
+    .map((row) => ({
+      cityId: Number(row.cityId || 0),
+      cityName: String(row.cityName || '').trim() || 'Без города',
+      totalChildren: Number(row.totalChildren || 0),
+      totalVouchers: Number(row.totalVouchers || 0),
+      totalPaid: Number(row.totalPaid || 0)
+    }));
 
   const payments = getPaymentsList();
   const notifications = getNotificationsList();
@@ -391,17 +414,33 @@ async function getDashboardData() {
     byApplication: [],
     updatedAt: ''
   };
+  const signingPlatforms = {
+    damubala: {
+      available: Boolean(signingStats.available),
+      signed: Number(signingStats.totalSigned || 0),
+      unsigned: Number(signingStats.totalUnsigned || 0),
+      updatedAt: String(signingStats.updatedAt || '')
+    },
+    qosymsha: {
+      available: false,
+      signed: 0,
+      unsigned: 0,
+      updatedAt: ''
+    }
+  };
 
   return {
     totalChildren: counts.totalChildren || 0,
     totalVouchers: counts.totalVouchers || 0,
     totalPaid: counts.totalPaid || 0,
+    cityStructure,
     nearestPayments: payments.slice(0, 5),
     overduePayments: payments.slice(0, 5),
     voucherEndingSoon: notifications.filter((x) => x.type === 'voucher-ending-soon').slice(0, 5),
     soonVoucherQueue,
     attendance,
-    signingStats
+    signingStats,
+    signingPlatforms
   };
 }
 

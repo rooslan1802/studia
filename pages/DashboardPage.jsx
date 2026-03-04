@@ -7,7 +7,14 @@ import Modal from '@components/Modal';
 export default function DashboardPage() {
   const [data, setData] = useState(null);
   const [selectedSoonVoucherChild, setSelectedSoonVoucherChild] = useState(null);
+  const [signingRefreshing, setSigningRefreshing] = useState(false);
+  const [signingError, setSigningError] = useState('');
   const navigate = useNavigate();
+
+  async function loadDashboard() {
+    const res = await api.getDashboard();
+    setData(res || null);
+  }
 
   useEffect(() => {
     let mounted = true;
@@ -23,6 +30,29 @@ export default function DashboardPage() {
     };
   }, []);
 
+  async function refreshSigningStats() {
+    setSigningRefreshing(true);
+    setSigningError('');
+    try {
+      const connectResult = await api.connectDamubala();
+      if (!connectResult?.success) {
+        throw new Error(connectResult?.message || 'Не удалось войти в Damubala.');
+      }
+      const refreshed = await api.refreshDamubalaSigningStats();
+      if (!refreshed?.success) {
+        throw new Error(refreshed?.message || 'Не удалось обновить табели Damubala.');
+      }
+      await loadDashboard();
+    } catch (error) {
+      setSigningError(error?.message || 'Ошибка обновления подписаний.');
+    } finally {
+      setSigningRefreshing(false);
+    }
+  }
+
+  const damubalaSigning = data?.signingPlatforms?.damubala || { signed: 0, unsigned: 0, available: false };
+  const qosymshaSigning = data?.signingPlatforms?.qosymsha || { signed: 0, unsigned: 0, available: false };
+
   return (
     <section>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -34,35 +64,28 @@ export default function DashboardPage() {
 
       {data && (
         <>
-          <div className="card-grid">
+          <div className="card-grid dashboard-top-cards">
             <StatCard label="Всего детей" value={data.totalChildren} onClick={() => navigate('/children')} />
-            <StatCard label="Ваучеры" value={data.totalVouchers} onClick={() => navigate('/children?type=voucher')} />
-            <StatCard label="Платники" value={data.totalPaid} onClick={() => navigate('/children?type=paid')} />
-            <StatCard label="Неподписанные (согласование)" value={data.signingStats?.totalUnsigned || 0} onClick={() => navigate('/')} />
           </div>
 
           <div className="dashboard-widgets">
             <div className="panel widget-card">
               <h3 className="widget-title">Структура детей</h3>
-              <div className="widget-bar-row">
-                <span>Платники</span>
-                <b>{data.totalPaid}</b>
-              </div>
-              <div className="widget-bar-track">
-                <div
-                  className="widget-bar-fill paid"
-                  style={{ width: `${Math.round((safePct(data.totalPaid, data.totalChildren) || 0) * 100) / 100}%` }}
-                />
-              </div>
-              <div className="widget-bar-row">
-                <span>Ваучеры</span>
-                <b>{data.totalVouchers}</b>
-              </div>
-              <div className="widget-bar-track">
-                <div
-                  className="widget-bar-fill voucher"
-                  style={{ width: `${Math.round((safePct(data.totalVouchers, data.totalChildren) || 0) * 100) / 100}%` }}
-                />
+              <div className="dashboard-city-list">
+                {(data.cityStructure || []).map((row) => (
+                  <div className="dashboard-city-item" key={row.cityId || row.cityName}>
+                    <div className="dashboard-city-top">
+                      <b>{row.cityName}</b>
+                      <span>{row.totalChildren}</span>
+                    </div>
+                    <div className="dashboard-city-meta">
+                      Ваучеры: {row.totalVouchers} • Платники: {row.totalPaid}
+                    </div>
+                  </div>
+                ))}
+                {!data.cityStructure?.length && (
+                  <div className="dashboard-city-empty">Пока нет данных по городам.</div>
+                )}
               </div>
             </div>
 
@@ -85,15 +108,50 @@ export default function DashboardPage() {
             </div>
 
             <div className="panel widget-card">
-              <h3 className="widget-title">Подписание табелей</h3>
-              <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>
-                <div className="profile-card voucher" style={{ margin: 0 }}>
-                  <b>Неподписанные</b>
-                  <div>{data.signingStats?.totalUnsigned || 0}</div>
+              <div className="widget-signing-head">
+                <h3 className="widget-title" style={{ margin: 0 }}>Подписание табелей</h3>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  title="Обновить подписи"
+                  onClick={refreshSigningStats}
+                  disabled={signingRefreshing}
+                >
+                  {signingRefreshing ? '…' : '↻'}
+                </button>
+              </div>
+              <div className="dashboard-signing-grid">
+                <div className="dashboard-signing-platform">
+                  <div className="dashboard-signing-platform-title">Damubala</div>
+                  {signingRefreshing ? (
+                    <div className="dashboard-signing-loading">
+                      <div className="dashboard-signing-spinner" />
+                      <div className="dashboard-signing-loading-text">Идет подсчет детей...</div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="dashboard-signing-row">
+                        <span>Подписано</span>
+                        <b>{damubalaSigning.signed || 0}</b>
+                      </div>
+                      <div className="dashboard-signing-row unsigned">
+                        <span>Не подписано</span>
+                        <b>{damubalaSigning.unsigned || 0}</b>
+                      </div>
+                    </>
+                  )}
+                  {!!signingError && <div className="dashboard-signing-error">{signingError}</div>}
                 </div>
-                <div className="profile-card paid" style={{ margin: 0 }}>
-                  <b>Подписанные</b>
-                  <div>{data.signingStats?.totalSigned || 0}</div>
+                <div className="dashboard-signing-platform">
+                  <div className="dashboard-signing-platform-title">Qosymsha</div>
+                  <div className="dashboard-signing-row">
+                    <span>Подписано</span>
+                    <b>{qosymshaSigning.signed || 0}</b>
+                  </div>
+                  <div className="dashboard-signing-row unsigned">
+                    <span>Не подписано</span>
+                    <b>{qosymshaSigning.unsigned || 0}</b>
+                  </div>
                 </div>
               </div>
             </div>
@@ -155,9 +213,4 @@ export default function DashboardPage() {
       )}
     </section>
   );
-}
-
-function safePct(value, total) {
-  if (!total) return 0;
-  return (Number(value || 0) * 100) / Number(total || 1);
 }

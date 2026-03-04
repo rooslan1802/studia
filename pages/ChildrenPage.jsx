@@ -3,6 +3,9 @@ import { useLocation } from 'react-router-dom';
 import { api } from '@renderer/api';
 import ChildModal from '@components/ChildModal';
 import Modal from '@components/Modal';
+import damubalaLogo from '@renderer/assets/import-logos/damubala.ico';
+import qosymshaLogo from '@renderer/assets/import-logos/qosymsha.png';
+import artsportLogo from '@renderer/assets/import-logos/artsport.ico';
 
 const paidReportFields = [
   { key: 'cityName', label: 'Город' },
@@ -130,6 +133,24 @@ function messageTagLabel(tag) {
   return '—';
 }
 
+function normalizeImportSource(source) {
+  const key = String(source || '').trim().toLowerCase();
+  if (key === 'damubala') return 'damubala';
+  if (key === 'qosymsha') return 'qosymsha';
+  if (key === 'artsport') return 'artsport';
+  if (key === 'excel') return 'excel';
+  return '';
+}
+
+function getImportSourceMeta(source) {
+  const key = normalizeImportSource(source);
+  if (key === 'damubala') return { key, label: 'Damubala', logo: damubalaLogo };
+  if (key === 'qosymsha') return { key, label: 'Qosymsha', logo: qosymshaLogo };
+  if (key === 'artsport') return { key, label: 'Artsport', logo: artsportLogo };
+  if (key === 'excel') return { key, label: 'Excel', logo: null };
+  return null;
+}
+
 function qosymshaChildKey(item, index) {
   return [
     String(item?.childIIN || '').trim(),
@@ -196,6 +217,13 @@ export default function ChildrenPage() {
   const [qosymshaPreview, setQosymshaPreview] = useState(null);
   const [qosymshaSelectedChildren, setQosymshaSelectedChildren] = useState({});
   const [qosymshaImportResult, setQosymshaImportResult] = useState(null);
+  const [artsportSyncing, setArtsportSyncing] = useState(false);
+  const [artsportSyncModalOpen, setArtsportSyncModalOpen] = useState(false);
+  const [artsportSyncLoadingText, setArtsportSyncLoadingText] = useState('');
+  const [artsportSyncProgress, setArtsportSyncProgress] = useState(0);
+  const [artsportPreview, setArtsportPreview] = useState(null);
+  const [artsportSelectedChildren, setArtsportSelectedChildren] = useState({});
+  const [artsportImportResult, setArtsportImportResult] = useState(null);
   const [bulkEditOpen, setBulkEditOpen] = useState(false);
   const [bulkEditData, setBulkEditData] = useState({ cityId: '', studioId: '', courseId: '', messageTag: '', voucherNumber: '' });
   const importInputRef = useRef(null);
@@ -220,6 +248,19 @@ export default function ChildrenPage() {
       const nextPercent = Number(payload.percent || 0);
       if (nextText) setQosymshaSyncLoadingText(nextText);
       if (Number.isFinite(nextPercent)) setQosymshaSyncProgress(Math.max(0, Math.min(100, nextPercent)));
+    });
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!api.onArtsportProgress) return undefined;
+    const unsubscribe = api.onArtsportProgress((payload = {}) => {
+      const nextText = String(payload.message || '').trim();
+      const nextPercent = Number(payload.percent || 0);
+      if (nextText) setArtsportSyncLoadingText(nextText);
+      if (Number.isFinite(nextPercent)) setArtsportSyncProgress(Math.max(0, Math.min(100, nextPercent)));
     });
     return () => {
       if (typeof unsubscribe === 'function') unsubscribe();
@@ -638,6 +679,15 @@ export default function ChildrenPage() {
     setQosymshaSyncModalOpen(true);
   }
 
+  function openArtsportSyncModal() {
+    setArtsportPreview(null);
+    setArtsportSelectedChildren({});
+    setArtsportSyncLoadingText('');
+    setArtsportSyncProgress(0);
+    setArtsportImportResult(null);
+    setArtsportSyncModalOpen(true);
+  }
+
   async function startQosymshaPreviewLoad() {
     setQosymshaSyncing(true);
     setQosymshaSyncLoadingText('Окно Qosymsha открыто. Войдите в аккаунт...');
@@ -664,6 +714,32 @@ export default function ChildrenPage() {
     }
   }
 
+  async function startArtsportPreviewLoad() {
+    setArtsportSyncing(true);
+    setArtsportSyncLoadingText('Окно Artsport открыто. Войдите в аккаунт...');
+    setArtsportSyncProgress(4);
+    try {
+      const preview = await api.fetchArtsportChildrenPreview();
+      if (!preview?.success) {
+        throw new Error(preview?.message || 'Не удалось получить детей из Artsport.');
+      }
+
+      const items = Array.isArray(preview.items) ? preview.items : [];
+      const defaultSelection = Object.fromEntries(items.map((item, idx) => [qosymshaChildKey(item, idx), true]));
+      setArtsportSelectedChildren(defaultSelection);
+      setArtsportPreview(preview);
+      setArtsportSyncLoadingText('');
+      setArtsportSyncProgress(100);
+      setArtsportImportResult(null);
+      setError('');
+    } catch (e) {
+      setError(e?.message || 'Не удалось получить данные из Artsport.');
+      setArtsportSyncProgress(0);
+    } finally {
+      setArtsportSyncing(false);
+    }
+  }
+
   function toggleQosymshaChild(item, index, checked) {
     const key = qosymshaChildKey(item, index);
     setQosymshaSelectedChildren((prev) => ({ ...prev, [key]: checked }));
@@ -673,6 +749,19 @@ export default function ChildrenPage() {
     const items = Array.isArray(qosymshaPreview?.items) ? qosymshaPreview.items : [];
     if (!items.length) return;
     setQosymshaSelectedChildren(
+      Object.fromEntries(items.map((item, idx) => [qosymshaChildKey(item, idx), checked]))
+    );
+  }
+
+  function toggleArtsportChild(item, index, checked) {
+    const key = qosymshaChildKey(item, index);
+    setArtsportSelectedChildren((prev) => ({ ...prev, [key]: checked }));
+  }
+
+  function selectAllArtsportChildren(checked) {
+    const items = Array.isArray(artsportPreview?.items) ? artsportPreview.items : [];
+    if (!items.length) return;
+    setArtsportSelectedChildren(
       Object.fromEntries(items.map((item, idx) => [qosymshaChildKey(item, idx), checked]))
     );
   }
@@ -725,6 +814,56 @@ export default function ChildrenPage() {
     } finally {
       setQosymshaSyncing(false);
       setQosymshaSyncLoadingText('');
+    }
+  }
+
+  async function importSelectedArtsportChildren() {
+    const items = Array.isArray(artsportPreview?.items) ? artsportPreview.items : [];
+    const selectedItems = items.filter((item, idx) => !!artsportSelectedChildren[qosymshaChildKey(item, idx)]);
+    if (!selectedItems.length) {
+      setError('Выберите хотя бы одного ребенка из Artsport.');
+      return;
+    }
+
+    setArtsportSyncing(true);
+    setArtsportSyncLoadingText('Импортируем выбранных детей в базу...');
+    setArtsportSyncProgress(100);
+    try {
+      const result = await api.syncArtsportVouchers({
+        fetched: Number(artsportPreview?.fetched || selectedItems.length),
+        items: selectedItems
+      });
+
+      if (!result?.success) {
+        throw new Error(result?.message || 'Не удалось синхронизировать данные из Artsport.');
+      }
+      if (Number(result.added || 0) + Number(result.updated || 0) === 0 && Number(result.skipped || 0) > 0) {
+        const firstError = Array.isArray(result.errors) && result.errors.length ? `\n${result.errors[0]}` : '';
+        throw new Error(`Не удалось импортировать детей из Artsport.${firstError}`);
+      }
+
+      await loadChildren();
+      await loadChildrenCounts();
+      setActiveList('voucher');
+      setCityFilter('');
+      setStudioFilter('');
+      setCourseFilter('');
+      setMessageTagFilter('');
+      setSearch('');
+      setError('');
+      setArtsportImportResult({
+        selected: selectedItems.length,
+        fetched: Number(result.fetched || 0),
+        added: Number(result.added || 0),
+        updated: Number(result.updated || 0),
+        skipped: Number(result.skipped || 0),
+        errors: Array.isArray(result.errors) ? result.errors.slice(0, 10) : []
+      });
+    } catch (e) {
+      setError(e?.message || 'Синхронизация с Artsport не удалась.');
+    } finally {
+      setArtsportSyncing(false);
+      setArtsportSyncLoadingText('');
     }
   }
 
@@ -975,6 +1114,7 @@ export default function ChildrenPage() {
             profile.parentEmail = String(row['Email родителя'] || row.parentEmail || '').trim();
             profile.voucherNumber = String(row['Номер ваучера'] || row.voucherNumber || 'ВАУЧЕР').trim() || 'ВАУЧЕР';
             profile.voucherEndDate = asIsoDate(row['Окончание ваучера'] || row.voucherEndDate) || enrollmentDate;
+            profile.importSource = normalizeImportSource(importSource || 'excel');
           }
 
           await api.saveChild({
@@ -1288,7 +1428,19 @@ export default function ChildrenPage() {
                   )}
                   <td>{row.cityName}</td>
                   <td>{row.studioName}</td>
-                  <td>{row.childName}</td>
+                  <td>
+                    <div className="child-name-with-source">
+                      <span>{row.childName}</span>
+                      {activeList === 'voucher' && getImportSourceMeta(row.importSource) && (
+                        <span className="import-source-chip">
+                          {getImportSourceMeta(row.importSource)?.logo ? (
+                            <img src={getImportSourceMeta(row.importSource).logo} alt={getImportSourceMeta(row.importSource).label} />
+                          ) : null}
+                          <span>{getImportSourceMeta(row.importSource).label}</span>
+                        </span>
+                      )}
+                    </div>
+                  </td>
                   <td>{row.childAge}</td>
                   <td>{row.courseName}</td>
                   <td>{row.groupName || '—'}</td>
@@ -1364,6 +1516,21 @@ export default function ChildrenPage() {
             )}
             {selectedChild.type === 'voucher' && (
               <div className="child-sheet-grid" style={{ marginTop: 10 }}>
+                <div className="child-sheet-row">
+                  <span>Источник импорта</span>
+                  <b>
+                    {(() => {
+                      const sourceMeta = getImportSourceMeta(selectedChild._meta?.importSource || selectedChild.profile?.importSource);
+                      if (!sourceMeta) return '—';
+                      return (
+                        <span className="import-source-chip inline">
+                          {sourceMeta.logo ? <img src={sourceMeta.logo} alt={sourceMeta.label} /> : null}
+                          <span>{sourceMeta.label}</span>
+                        </span>
+                      );
+                    })()}
+                  </b>
+                </div>
                 <div className="child-sheet-row"><span>ИИН родителя</span><b>{selectedChild.profile?.parentIIN || '—'}</b></div>
                 <div className="child-sheet-row"><span>Email родителя</span><b>{selectedChild.profile?.parentEmail || '—'}</b></div>
                 <label className="child-sheet-row full">
@@ -1761,14 +1928,21 @@ export default function ChildrenPage() {
                 className={importSource === 'damubala' ? 'primary' : ''}
                 onClick={() => setImportSource('damubala')}
               >
-                Damubala
+                <span className="import-source-btn-content"><img src={damubalaLogo} alt="Damubala" />Damubala</span>
               </button>
               <button
                 type="button"
                 className={importSource === 'qosymsha' ? 'primary' : ''}
                 onClick={() => setImportSource('qosymsha')}
               >
-                Qosymsha
+                <span className="import-source-btn-content"><img src={qosymshaLogo} alt="Qosymsha" />Qosymsha</span>
+              </button>
+              <button
+                type="button"
+                className={importSource === 'artsport' ? 'primary' : ''}
+                onClick={() => setImportSource('artsport')}
+              >
+                <span className="import-source-btn-content"><img src={artsportLogo} alt="Artsport" />Artsport</span>
               </button>
             </div>
           )}
@@ -1808,6 +1982,25 @@ export default function ChildrenPage() {
                   disabled={qosymshaSyncing}
                 >
                   {qosymshaSyncing ? 'Подключение...' : 'Импортировать из Qosymsha'}
+                </button>
+              </div>
+            </div>
+          ) : activeList === 'voucher' && importSource === 'artsport' ? (
+            <div>
+              <div style={{ marginTop: 6, color: '#97a7c3', fontSize: 13 }}>
+                Импорт детей из Artsport. Загружаются только ваучеры со статусом «активирован».
+              </div>
+              <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
+                <button
+                  className="primary"
+                  type="button"
+                  onClick={() => {
+                    setImportOpen(false);
+                    openArtsportSyncModal();
+                  }}
+                  disabled={artsportSyncing}
+                >
+                  {artsportSyncing ? 'Подключение...' : 'Импортировать из Artsport'}
                 </button>
               </div>
             </div>
@@ -2096,6 +2289,125 @@ export default function ChildrenPage() {
                   {!!qosymshaImportResult.errors?.length && (
                     <div style={{ marginTop: 8, color: '#ff9aa5' }}>
                       {qosymshaImportResult.errors.map((err) => <div key={err}>{err}</div>)}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </Modal>
+      )}
+
+      {artsportSyncModalOpen && (
+        <Modal title="Синхронизация с Artsport" onClose={() => !artsportSyncing && setArtsportSyncModalOpen(false)}>
+          {!artsportPreview && (
+            <div className="form-grid">
+              {artsportSyncing && (
+                <div className="full queue-refresh-wrap" style={{ marginTop: 2 }}>
+                  <div className="queue-refresh-spinner" />
+                  <div className="queue-refresh-text">{artsportSyncLoadingText || 'Загрузка данных...'}</div>
+                  <div className="queue-refresh-progress">
+                    <div className="queue-refresh-progress-head">
+                      <span>Прогресс загрузки</span>
+                      <b>{Math.min(100, Math.round(artsportSyncProgress || 0))}%</b>
+                    </div>
+                    <div className="queue-refresh-track">
+                      <div className="queue-refresh-fill" style={{ width: `${Math.min(100, artsportSyncProgress || 0)}%` }} />
+                    </div>
+                  </div>
+                </div>
+              )}
+              {!artsportSyncing && (
+                <div className="full" style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+                  <button className="primary" type="button" onClick={startArtsportPreviewLoad}>
+                    Войти в Artsport и получить детей
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {artsportPreview && (
+            <div>
+              <div style={{ color: '#97a7c3', marginBottom: 10 }}>
+                Выберите детей из Artsport, которых нужно импортировать.
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                <button type="button" onClick={() => selectAllArtsportChildren(true)}>Выбрать все</button>
+                <button type="button" onClick={() => selectAllArtsportChildren(false)}>Снять выбор</button>
+              </div>
+              <div className="panel" style={{ maxHeight: 340, overflow: 'auto', padding: 10 }}>
+                {(artsportPreview.items || []).map((item, idx) => {
+                  const key = qosymshaChildKey(item, idx);
+                  return (
+                    <label key={key} style={{ display: 'grid', gridTemplateColumns: '24px 1fr', gap: 8, marginBottom: 8 }}>
+                      <input
+                        type="checkbox"
+                        checked={!!artsportSelectedChildren[key]}
+                        onChange={(e) => toggleArtsportChild(item, idx, e.target.checked)}
+                      />
+                      <div>
+                        <b>{item.childFullName || `Ребенок ${idx + 1}`}</b>
+                        <div style={{ color: '#97a7c3', fontSize: 12, marginTop: 2 }}>
+                          Родитель: {item.parentFullName || '—'} • Телефон: {item.parentPhone || '—'}
+                        </div>
+                        <div style={{ color: '#97a7c3', fontSize: 12, marginTop: 2 }}>
+                          ИИН ребенка: {item.childIIN || '—'} • ИИН родителя: {item.parentIIN || '—'} • Email: {item.parentEmail || '—'}
+                        </div>
+                        <div style={{ color: '#97a7c3', fontSize: 12, marginTop: 2 }}>
+                          Студия: {item.studioName || '—'} • Кружок: {item.courseName || '—'}
+                        </div>
+                        <div style={{ color: '#97a7c3', fontSize: 12, marginTop: 2 }}>
+                          Ваучер: {item.voucherNumber || '—'} • Дата активации: {item.enrollmentDate || '—'}
+                        </div>
+                      </div>
+                    </label>
+                  );
+                })}
+                {!artsportPreview.items?.length && <div>Не найдено активированных детей в Artsport.</div>}
+              </div>
+              {artsportSyncing && (
+                <div className="queue-refresh-wrap" style={{ marginTop: 10 }}>
+                  <div className="queue-refresh-spinner" />
+                  <div className="queue-refresh-text">{artsportSyncLoadingText || 'Импорт...'}</div>
+                  <div className="queue-refresh-progress">
+                    <div className="queue-refresh-progress-head">
+                      <span>Прогресс загрузки</span>
+                      <b>{Math.min(100, Math.round(artsportSyncProgress || 0))}%</b>
+                    </div>
+                    <div className="queue-refresh-track">
+                      <div className="queue-refresh-fill" style={{ width: `${Math.min(100, artsportSyncProgress || 0)}%` }} />
+                    </div>
+                  </div>
+                </div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 12 }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setArtsportPreview(null);
+                    setArtsportSelectedChildren({});
+                    setArtsportImportResult(null);
+                  }}
+                  disabled={artsportSyncing}
+                >
+                  Назад
+                </button>
+                <button className="primary" type="button" onClick={importSelectedArtsportChildren} disabled={artsportSyncing}>
+                  Импортировать выбранных детей
+                </button>
+              </div>
+              {artsportImportResult && (
+                <div className="panel" style={{ marginTop: 12 }}>
+                  <div><b>Итог импорта Artsport</b></div>
+                  <div>Выбрано: {artsportImportResult.selected}</div>
+                  <div>Получено: {artsportImportResult.fetched}</div>
+                  <div>Добавлено: {artsportImportResult.added}</div>
+                  <div>Обновлено: {artsportImportResult.updated}</div>
+                  <div>Пропущено: {artsportImportResult.skipped}</div>
+                  {!!artsportImportResult.errors?.length && (
+                    <div style={{ marginTop: 8, color: '#ff9aa5' }}>
+                      {artsportImportResult.errors.map((err) => <div key={err}>{err}</div>)}
                     </div>
                   )}
                 </div>

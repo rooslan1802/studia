@@ -73,6 +73,14 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('qosymsha:progress', listener);
     return () => ipcRenderer.removeListener('qosymsha:progress', listener);
   },
+  fetchArtsportChildrenPreview: () => ipcRenderer.invoke('artsport:fetch-children-preview'),
+  syncArtsportVouchers: (payload) => ipcRenderer.invoke('artsport:sync-vouchers', payload),
+  onArtsportProgress: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_, payload) => callback(payload || {});
+    ipcRenderer.on('artsport:progress', listener);
+    return () => ipcRenderer.removeListener('artsport:progress', listener);
+  },
   pickDamubalaSaveDir: () => ipcRenderer.invoke('damubala:pick-save-dir'),
   saveDamubalaImages: (payload) => ipcRenderer.invoke('damubala:save-images', payload)
 });

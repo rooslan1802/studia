@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS VoucherProfile (
   parentPhone TEXT NOT NULL,
   childFullName TEXT NOT NULL,
   childIIN TEXT NOT NULL DEFAULT '',
+  importSource TEXT NOT NULL DEFAULT '',
   childBirthDate TEXT,
   manualAge INTEGER,
   manualAgeSetDate TEXT,

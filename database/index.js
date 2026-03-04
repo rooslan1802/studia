@@ -67,6 +67,9 @@ function migrate(database) {
   if (!hasColumn(database, 'VoucherProfile', 'manualAgeSetDate')) {
     alterStatements.push('ALTER TABLE VoucherProfile ADD COLUMN manualAgeSetDate TEXT');
   }
+  if (!hasColumn(database, 'VoucherProfile', 'importSource')) {
+    alterStatements.push("ALTER TABLE VoucherProfile ADD COLUMN importSource TEXT NOT NULL DEFAULT ''");
+  }
 
   if (!hasColumn(database, 'PaidProfile', 'childIIN')) {
     alterStatements.push('ALTER TABLE PaidProfile ADD COLUMN childIIN TEXT');

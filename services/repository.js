@@ -457,6 +457,7 @@ function listChildren(filters = {}) {
       vp.manualAge AS voucherManualAge,
       pp.manualAge AS paidManualAge,
       vp.manualAgeSetDate AS voucherManualAgeSetDate,
+      vp.importSource AS importSource,
       pp.manualAgeSetDate AS paidManualAgeSetDate,
       vp.voucherEndDate,
       pp.lastPaymentDate,
@@ -529,7 +530,8 @@ function listChildren(filters = {}) {
       parentIIN: row.type === 'voucher' ? row.voucherParentIIN : '',
       childIIN,
       childBirthDate: ageCalc.birthDate || childBirthDate || null,
-      childAge: ageCalc.age
+      childAge: ageCalc.age,
+      importSource: row.type === 'voucher' ? String(row.importSource || '').trim().toLowerCase() : ''
     };
   });
 }
@@ -775,12 +777,13 @@ function saveChild(payload) {
     const ageFields = computeAgeForProfile(profile, previousProfile);
 
     if (payload.type === 'voucher') {
+      const importSource = String(profile.importSource || previousProfile?.importSource || '').trim().toLowerCase();
       db.prepare(`
         INSERT INTO VoucherProfile (
           childId, parentFullName, parentIIN, parentEmail, parentPhone,
-          childFullName, childIIN, childBirthDate, manualAge, manualAgeSetDate, childAge,
+          childFullName, childIIN, importSource, childBirthDate, manualAge, manualAgeSetDate, childAge,
           voucherNumber, enrollmentDate, voucherEndDate
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         childId,
         profile.parentFullName,
@@ -789,6 +792,7 @@ function saveChild(payload) {
         profile.parentPhone,
         profile.childFullName,
         profile.childIIN || '',
+        importSource,
         ageFields.childBirthDate,
         ageFields.manualAge,
         ageFields.manualAgeSetDate,
@@ -900,6 +904,7 @@ function importExternalVouchers(payload = {}, options = {}) {
   const fallbackCityId = Number(payload.cityId || 0);
   const sourceName = String(options.sourceName || 'External').trim() || 'External';
   const voucherPrefix = String(options.voucherPrefix || sourceName).trim().toUpperCase() || 'EXTERNAL';
+  const importSource = String(options.importSource || '').trim().toLowerCase();
 
   const findCityByName = db.prepare('SELECT id, name FROM Cities WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) LIMIT 1');
   const insertCity = db.prepare('INSERT INTO Cities (name) VALUES (?)');
@@ -1020,6 +1025,7 @@ function importExternalVouchers(payload = {}, options = {}) {
         profile: {
           childFullName,
           childIIN,
+          importSource,
           childBirthDate,
           manualAge: null,
           parentPhone,
@@ -1052,14 +1058,24 @@ function importExternalVouchers(payload = {}, options = {}) {
 function importDamubalaVouchers(payload = {}) {
   return importExternalVouchers(payload, {
     sourceName: 'Damubala',
-    voucherPrefix: 'DAMUBALA'
+    voucherPrefix: 'DAMUBALA',
+    importSource: 'damubala'
   });
 }
 
 function importQosymshaVouchers(payload = {}) {
   return importExternalVouchers(payload, {
     sourceName: 'Qosymsha',
-    voucherPrefix: 'QOSYMSHA'
+    voucherPrefix: 'QOSYMSHA',
+    importSource: 'qosymsha'
+  });
+}
+
+function importArtsportVouchers(payload = {}) {
+  return importExternalVouchers(payload, {
+    sourceName: 'Artsport',
+    voucherPrefix: 'ARTSPORT',
+    importSource: 'artsport'
   });
 }
 
@@ -1635,6 +1651,7 @@ module.exports = {
   setChildrenCourse,
   importDamubalaVouchers,
   importQosymshaVouchers,
+  importArtsportVouchers,
   clearAllChildrenData,
   savePaymentComment,
   markPaymentPaid,

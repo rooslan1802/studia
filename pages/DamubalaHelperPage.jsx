@@ -324,14 +324,16 @@ export default function DamubalaHelperPage() {
     window.setTimeout(() => setPasswordProgress(0), 700);
   }
 
-  async function refreshQrForList() {
+  async function refreshQrForList(forceAll = false) {
     if (!sortedChildren.length || processing || passwordProcessing) return;
     setProcessing(true);
     setProcessingChildId(null);
     setQrProgress(6);
     setError('');
-    setLog((prev) => [...prev, `Старт обновления QR: ${new Date().toLocaleString()}`]);
-    const targetChildren = sortedChildren.filter((row) => qrStatusByChild[row.id] !== 'no-qr');
+    setLog((prev) => [...prev, `${forceAll ? 'Старт полной проверки QR' : 'Старт обновления QR'}: ${new Date().toLocaleString()}`]);
+    const targetChildren = forceAll
+      ? sortedChildren
+      : sortedChildren.filter((row) => qrStatusByChild[row.id] !== 'no-qr');
 
     let success = 0;
     let failed = 0;
@@ -475,6 +477,13 @@ export default function DamubalaHelperPage() {
           </button>
           <button type="button" className="primary" onClick={refreshQrForList} disabled={processing || passwordProcessing || !sortedChildren.length}>
             {processing ? 'Обновление QR...' : 'Обновить QR'}
+          </button>
+          <button
+            type="button"
+            onClick={() => refreshQrForList(true)}
+            disabled={processing || passwordProcessing || !sortedChildren.length}
+          >
+            Проверить все QR
           </button>
           <button type="button" onClick={() => selectAllForSave(true)}>Выбрать всех QR</button>
           <button type="button" onClick={() => selectAllForSave(false)}>Снять выбор QR</button>

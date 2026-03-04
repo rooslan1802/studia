@@ -80,8 +80,8 @@ function pickBestToken(candidates = []) {
   return uniq[0] || '';
 }
 
-async function extractAuthTokenFromWindow(authWindow) {
-  if (!authWindow || authWindow.isDestroyed()) return '';
+async function extractAuthTokenCandidatesFromWindow(authWindow) {
+  if (!authWindow || authWindow.isDestroyed()) return [];
 
   try {
     const token = await authWindow.webContents.executeJavaScript(`(() => {
@@ -123,27 +123,47 @@ async function extractAuthTokenFromWindow(authWindow) {
       return uniq;
     })()`, true);
 
-    if (!Array.isArray(token)) return '';
-    return pickBestToken(token);
+    if (!Array.isArray(token)) return [];
+    const uniq = [...new Set(token.filter(Boolean))];
+    const best = pickBestToken(uniq);
+    if (!best) return uniq;
+    return [best, ...uniq.filter((x) => x !== best)];
   } catch {
-    return '';
+    return [];
   }
 }
 
 async function waitForAuthToken(authWindow, timeoutMs = 5 * 60 * 1000) {
   const startedAt = Date.now();
+  const badTokens = new Set();
 
   while (Date.now() - startedAt < timeoutMs) {
     if (!authWindow || authWindow.isDestroyed()) {
       throw new Error('Окно авторизации закрыто. Синхронизация отменена.');
     }
 
-    const token = await extractAuthTokenFromWindow(authWindow);
-    if (token) return token;
+    const tokens = await extractAuthTokenCandidatesFromWindow(authWindow);
+    if (tokens.length) {
+      for (const token of tokens) {
+        if (!token || badTokens.has(token)) continue;
+        try {
+          await fetchJsonWithToken(token, 'timeSheet/Get', {
+            PageNumber: 1,
+            PageSize: 1,
+            childIIN: '',
+            month: new Date().getMonth() + 1,
+            year: new Date().getFullYear()
+          });
+          return token;
+        } catch {
+          badTokens.add(token);
+        }
+      }
+    }
     await delay(1200);
   }
 
-  throw new Error('Не удалось получить токен Damubala. Войдите в аккаунт и попробуйте снова.');
+  throw new Error('Не удалось подтвердить вход в Damubala. Перезайдите и попробуйте снова.');
 }
 
 async function ensureDamubalaLoginWithWindow() {
@@ -162,6 +182,9 @@ async function ensureDamubalaLoginWithWindow() {
   });
 
   try {
+    const ses = authWindow.webContents.session;
+    await ses.clearStorageData();
+    await ses.clearCache();
     await authWindow.loadURL(DAMUBALA_URL);
     const token = await waitForAuthToken(authWindow);
     LAST_AUTH_TOKEN = token;
@@ -329,12 +352,9 @@ async function asyncPool(limit, items, iterator) {
   return Promise.all(ret);
 }
 
-async function getTimesheetsInApproval(token) {
+async function fetchTimesheetsByMonth(token, month, year) {
   let page = 1;
   const all = [];
-  const now = new Date();
-  const month = now.getMonth() + 1;
-  const year = now.getFullYear();
   while (true) {
     const payload = await fetchJsonWithToken(token, 'timeSheet/Get', {
       PageNumber: page,
@@ -353,28 +373,151 @@ async function getTimesheetsInApproval(token) {
   return all;
 }
 
+async function fetchTimesheetsByMonthWithStatus(token, month, year, statusId) {
+  let page = 1;
+  const all = [];
+  while (true) {
+    const payload = await fetchJsonWithToken(token, 'timeSheet/Get', {
+      PageNumber: page,
+      PageSize: TIMESHEET_PAGE_SIZE,
+      childIIN: '',
+      month,
+      year,
+      hVisitHistoryStatusIds: statusId
+    });
+    const rows = Array.isArray(payload?.data) ? payload.data : [];
+    if (!rows.length) break;
+    all.push(...rows);
+    const total = Number(payload?.count || all.length);
+    if ((page * TIMESHEET_PAGE_SIZE) >= total) break;
+    page += 1;
+  }
+  return all;
+}
+
+async function getTimesheetsInApproval(token) {
+  const now = new Date();
+  const thisMonth = { month: now.getMonth() + 1, year: now.getFullYear() };
+  const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const prevMonth = { month: prev.getMonth() + 1, year: prev.getFullYear() };
+
+  const [currentRows, previousRows] = await Promise.all([
+    fetchTimesheetsByMonth(token, thisMonth.month, thisMonth.year),
+    fetchTimesheetsByMonth(token, prevMonth.month, prevMonth.year)
+  ]);
+
+  const unique = new Map();
+  [...currentRows, ...previousRows].forEach((row) => {
+    const id = Number(row?.id || 0);
+    if (!id) return;
+    if (!unique.has(id)) unique.set(id, row);
+  });
+  return [...unique.values()];
+}
+
+async function getUnsignedTimesheets(token) {
+  const now = new Date();
+  const thisMonth = { month: now.getMonth() + 1, year: now.getFullYear() };
+  const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const prevMonth = { month: prev.getMonth() + 1, year: prev.getFullYear() };
+
+  const [currentRows, previousRows] = await Promise.all([
+    fetchTimesheetsByMonthWithStatus(token, thisMonth.month, thisMonth.year, 1),
+    fetchTimesheetsByMonthWithStatus(token, prevMonth.month, prevMonth.year, 1)
+  ]);
+
+  const unique = new Map();
+  [...currentRows, ...previousRows].forEach((row) => {
+    const id = Number(row?.id || 0);
+    if (!id) return;
+    if (!unique.has(id)) unique.set(id, row);
+  });
+  return [...unique.values()];
+}
+
+function rowKey(applicationId, courseName) {
+  return `${Number(applicationId || 0)}:${String(courseName || 'Без кружка').trim() || 'Без кружка'}`;
+}
+
+function mergeRowsByApplication(rows = []) {
+  const grouped = new Map();
+  rows.forEach((row) => {
+    const appId = Number(row?.applicationId || 0);
+    const courseName = String(row?.courseName || 'Без кружка').trim() || 'Без кружка';
+    const key = rowKey(appId, courseName);
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        applicationId: appId,
+        courseName,
+        signedCount: 0,
+        unsignedCount: 0
+      });
+    }
+    const current = grouped.get(key);
+    current.signedCount += Number(row?.signedCount || 0);
+    current.unsignedCount += Number(row?.unsignedCount || 0);
+  });
+  return [...grouped.values()];
+}
+
 function normalizeHistory(raw) {
   if (Array.isArray(raw)) return raw;
   if (Array.isArray(raw?.result)) return raw.result;
   return [];
 }
 
-async function getDamubalaSigningStats() {
-  const token = LAST_AUTH_TOKEN;
-  if (!token) {
-    LAST_SIGNING_STATS = {
-      available: false,
-      totalSigned: 0,
-      totalUnsigned: 0,
-      byApplication: [],
-      updatedAt: new Date().toISOString()
-    };
-    return LAST_SIGNING_STATS;
+function monthParamsNowAndPrev() {
+  const now = new Date();
+  const thisMonth = { month: now.getMonth() + 1, year: now.getFullYear() };
+  const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const prevMonth = { month: prev.getMonth() + 1, year: prev.getFullYear() };
+  return { thisMonth, prevMonth };
+}
+
+async function ensureValidTokenForSigningStats() {
+  const { thisMonth } = monthParamsNowAndPrev();
+
+  async function probe(token) {
+    await fetchJsonWithToken(token, 'timeSheet/Get', {
+      PageNumber: 1,
+      PageSize: 1,
+      childIIN: '',
+      month: thisMonth.month,
+      year: thisMonth.year
+    });
   }
 
+  if (LAST_AUTH_TOKEN) {
+    try {
+      await probe(LAST_AUTH_TOKEN);
+      return LAST_AUTH_TOKEN;
+    } catch {
+      LAST_AUTH_TOKEN = '';
+    }
+  }
+
+  const token = await ensureDamubalaLoginWithWindow();
+  await probe(token);
+  return token;
+}
+
+async function getDamubalaSigningStats() {
   try {
-    const timesheets = await getTimesheetsInApproval(token);
-    if (!timesheets.length) {
+    const token = await ensureValidTokenForSigningStats();
+    const { thisMonth, prevMonth } = monthParamsNowAndPrev();
+    const [currentRows, previousRows] = await Promise.all([
+      fetchTimesheetsByMonth(token, thisMonth.month, thisMonth.year),
+      fetchTimesheetsByMonth(token, prevMonth.month, prevMonth.year)
+    ]);
+    const uniqueSheets = new Map();
+    [...currentRows, ...previousRows].forEach((row) => {
+      const id = Number(row?.id || 0);
+      if (!id) return;
+      if (!uniqueSheets.has(id)) uniqueSheets.set(id, row);
+    });
+
+    const sheets = [...uniqueSheets.values()];
+    if (!sheets.length) {
       LAST_SIGNING_STATS = {
         available: true,
         totalSigned: 0,
@@ -386,47 +529,29 @@ async function getDamubalaSigningStats() {
     }
 
     const rows = [];
-    await asyncPool(SIGNATURE_CONCURRENCY, timesheets, async (sheet) => {
-      const [detailsRaw, historyRaw] = await Promise.all([
-        fetchJsonWithToken(token, `timeSheet/GetById/${sheet.id}`),
-        fetchJsonWithToken(token, `timeSheet/GetSignatureHistoryV2/${sheet.id}`)
-      ]);
-      const details = detailsRaw || {};
-      const history = normalizeHistory(historyRaw);
-      const subscriptions = Array.isArray(details?.subscriptions) ? details.subscriptions : [];
-      if (!subscriptions.length) return;
-
-      const applicationId = Number(details?.class?.course?.application?.id || sheet?.class?.course?.application?.id || 0);
-      const courseName = String(
-        details?.class?.hCourseDirectionNameRu ||
-        details?.class?.course?.hCourseDirection?.nameRu ||
-        sheet?.class?.hCourseDirectionNameRu ||
-        'Без кружка'
-      ).trim();
+    await asyncPool(SIGNATURE_CONCURRENCY, sheets, async (sheet) => {
+      const attendanceId = Number(sheet?.id || 0);
+      if (!attendanceId) return;
+      const detailsRaw = await fetchJsonWithToken(token, `timeSheet/SignatureDetails/${attendanceId}`, { userId: '' });
+      const details = Array.isArray(detailsRaw) ? detailsRaw : [];
+      if (!details.length) return;
 
       let unsignedCount = 0;
       let signedCount = 0;
-      subscriptions.forEach((sub) => {
-        const childId = Number(sub?.child?.id || 0);
-        if (!childId) return;
-        const childHistory = history.filter((entry) =>
-          String(entry?.role || '').toUpperCase() === 'PARENT' && Number(entry?.childId || 0) === childId
-        );
-        if (!childHistory.length) return;
-        const names = childHistory.map((entry) => String(entry?.hVisitHistoryStatus?.nameRu || '').toLowerCase());
-        const signedByTime = childHistory.some((entry) => {
-          const signedAt = String(entry?.signedAt || '');
-          return signedAt && signedAt !== '0001-01-01T00:00:00';
-        });
-        const isSigned = signedByTime || names.some((name) => name.includes('подпис') && !name.includes('не подпис'));
-        const isInApprovalFlow = names.some((name) =>
-          name.includes('на согласовании у родителей') || name.includes('не подпис') || name.includes('подпис')
-        );
-        if (!isInApprovalFlow) return;
-        if (isSigned) signedCount += 1;
-        else unsignedCount += 1;
+      details.forEach((row) => {
+        const statusId = Number(row?.hVisitHistoryStatus?.id || 0);
+        if (!statusId) return;
+        if (statusId === 6) unsignedCount += 1;
+        else signedCount += 1;
       });
+      if (!unsignedCount && !signedCount) return;
 
+      const applicationId = Number(sheet?.class?.course?.application?.id || 0);
+      const courseName = String(
+        sheet?.class?.hCourseDirectionNameRu ||
+        sheet?.class?.course?.hCourseDirection?.nameRu ||
+        'Без кружка'
+      ).trim();
       rows.push({
         applicationId: applicationId || 0,
         courseName: courseName || 'Без кружка',
@@ -435,19 +560,7 @@ async function getDamubalaSigningStats() {
       });
     });
 
-    const grouped = new Map();
-    rows.forEach((row) => {
-      const key = `${row.applicationId}:${row.courseName}`;
-      if (!grouped.has(key)) {
-        grouped.set(key, { ...row });
-      } else {
-        const current = grouped.get(key);
-        current.signedCount += row.signedCount;
-        current.unsignedCount += row.unsignedCount;
-      }
-    });
-
-    const byApplication = [...grouped.values()]
+    const byApplication = mergeRowsByApplication(rows)
       .filter((row) => row.unsignedCount > 0 || row.signedCount > 0)
       .sort((a, b) => b.unsignedCount - a.unsignedCount);
 
@@ -462,7 +575,7 @@ async function getDamubalaSigningStats() {
       updatedAt: new Date().toISOString()
     };
     return LAST_SIGNING_STATS;
-  } catch {
+  } catch (error) {
     LAST_SIGNING_STATS = {
       available: false,
       totalSigned: 0,
@@ -470,7 +583,7 @@ async function getDamubalaSigningStats() {
       byApplication: [],
       updatedAt: new Date().toISOString()
     };
-    return LAST_SIGNING_STATS;
+    throw new Error(error?.message || 'Не удалось получить данные табелей Damubala.');
   }
 }
 
