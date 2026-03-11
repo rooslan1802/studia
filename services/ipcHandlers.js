@@ -1,6 +1,7 @@
-const { ipcMain, dialog, BrowserWindow } = require('electron');
+const { ipcMain, dialog, BrowserWindow, app } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
+const { getDb, getDbPath, closeDatabase } = require('../database');
 const repository = require('./repository');
 const {
   getDashboardData,
@@ -22,6 +23,77 @@ const { fetchQosymshaChildrenPreviewWithLogin } = require('./qosymshaSyncService
 const { fetchArtsportChildrenPreviewWithLogin } = require('./artsportSyncService');
 
 const DEFAULT_USER_ID = 'local-user';
+const BACKUP_FILE_EXT = '.sqlite';
+const RESTORE_HISTORY_FILE = 'restore-history.json';
+
+function backupTimestamp(now = new Date()) {
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+}
+
+function resolveBackupsDir() {
+  const rootPath = app.getAppPath();
+  return path.join(rootPath, 'database', 'backups');
+}
+
+function ensureBackupsDir() {
+  const dir = resolveBackupsDir();
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function resolveRestoreHistoryPath() {
+  return path.join(ensureBackupsDir(), RESTORE_HISTORY_FILE);
+}
+
+function readRestoreHistory() {
+  const filePath = resolveRestoreHistoryPath();
+  if (!fs.existsSync(filePath)) return [];
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRestoreHistory(items) {
+  const trimmed = Array.isArray(items) ? items.slice(0, 100) : [];
+  fs.writeFileSync(resolveRestoreHistoryPath(), JSON.stringify(trimmed, null, 2), 'utf8');
+}
+
+function appendRestoreHistory(entry) {
+  const current = readRestoreHistory();
+  current.unshift(entry);
+  saveRestoreHistory(current);
+}
+
+function toBackupEntry(fileName) {
+  const backupsDir = resolveBackupsDir();
+  const fullPath = path.join(backupsDir, fileName);
+  const stat = fs.statSync(fullPath);
+  const createdAt = stat.birthtime?.toISOString?.() || stat.mtime.toISOString();
+  return {
+    id: fileName,
+    fileName,
+    fullPath,
+    size: stat.size,
+    createdAt
+  };
+}
+
+function listBackupEntries() {
+  const dir = ensureBackupsDir();
+  const files = fs
+    .readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(BACKUP_FILE_EXT))
+    .map((entry) => entry.name);
+
+  return files
+    .map((fileName) => toBackupEntry(fileName))
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+}
 
 function sanitizeFileName(name) {
   return String(name || '')
@@ -221,6 +293,198 @@ async function renderModalPngBuffer({ qrDataUrl, childName }) {
 }
 
 function registerIpcHandlers() {
+  const actor = 'local-user';
+
+  ipcMain.handle('backup:list', async () => {
+    try {
+      return {
+        success: true,
+        backups: listBackupEntries(),
+        restoreHistory: readRestoreHistory()
+      };
+    } catch (error) {
+      return { success: false, message: error?.message || 'Не удалось загрузить список резервных копий.' };
+    }
+  });
+
+  ipcMain.handle('backup:create', async () => {
+    try {
+      const backupsDir = ensureBackupsDir();
+      const fileName = `studia-backup-${backupTimestamp()}${BACKUP_FILE_EXT}`;
+      const filePath = path.join(backupsDir, fileName);
+      await getDb().backup(filePath);
+      repository.addAuditLog({
+        actionType: 'backup.create',
+        entityType: 'backup',
+        entityId: fileName,
+        actor,
+        summary: 'Создана резервная копия',
+        payloadJson: { backupId: fileName }
+      });
+      return { success: true, backup: toBackupEntry(fileName) };
+    } catch (error) {
+      return { success: false, message: error?.message || 'Не удалось создать резервную копию.' };
+    }
+  });
+
+  ipcMain.handle('backup:restore', async (_, payload = {}) => {
+    try {
+      const backupId = String(payload.backupId || '').trim();
+      if (!backupId) {
+        return { success: false, message: 'Не выбрана резервная копия.' };
+      }
+      const fileName = path.basename(backupId);
+      const backupPath = path.join(resolveBackupsDir(), fileName);
+      if (!fs.existsSync(backupPath)) {
+        return { success: false, message: 'Резервная копия не найдена.' };
+      }
+
+      appendRestoreHistory({
+        id: `${Date.now()}-${fileName}`,
+        backupId: fileName,
+        restoredAt: new Date().toISOString()
+      });
+      repository.addAuditLog({
+        actionType: 'backup.restore',
+        entityType: 'backup',
+        entityId: fileName,
+        actor,
+        summary: 'Выполнено восстановление из резервной копии',
+        payloadJson: { backupId: fileName }
+      });
+      closeDatabase();
+      fs.copyFileSync(backupPath, getDbPath());
+      app.relaunch();
+      app.exit(0);
+      return { success: true, restarting: true };
+    } catch (error) {
+      return { success: false, message: error?.message || 'Не удалось восстановить резервную копию.' };
+    }
+  });
+
+  ipcMain.handle('database:export', async () => {
+    try {
+      const defaultPath = path.join(
+        app.getPath('documents'),
+        `studia-export-${backupTimestamp()}${BACKUP_FILE_EXT}`
+      );
+      const saveDialog = await dialog.showSaveDialog({
+        title: 'Экспорт базы данных',
+        defaultPath,
+        filters: [{ name: 'SQLite database', extensions: ['sqlite', 'db'] }]
+      });
+
+      if (saveDialog.canceled || !saveDialog.filePath) {
+        return { success: false, canceled: true };
+      }
+
+      await getDb().backup(saveDialog.filePath);
+      repository.addAuditLog({
+        actionType: 'database.export',
+        entityType: 'database',
+        actor,
+        summary: 'Экспортирована база данных',
+        payloadJson: { filePath: saveDialog.filePath }
+      });
+      return { success: true, filePath: saveDialog.filePath };
+    } catch (error) {
+      return { success: false, message: error?.message || 'Не удалось экспортировать базу данных.' };
+    }
+  });
+
+  ipcMain.handle('backup:delete', async (_, payload = {}) => {
+    try {
+      const backupId = String(payload.backupId || '').trim();
+      if (!backupId) {
+        return { success: false, message: 'Не выбрана резервная копия.' };
+      }
+      const fileName = path.basename(backupId);
+      const backupPath = path.join(resolveBackupsDir(), fileName);
+      if (!fs.existsSync(backupPath)) {
+        return { success: false, message: 'Резервная копия не найдена.' };
+      }
+      fs.unlinkSync(backupPath);
+      repository.addAuditLog({
+        actionType: 'backup.delete',
+        entityType: 'backup',
+        entityId: fileName,
+        actor,
+        summary: 'Удалена резервная копия',
+        payloadJson: { backupId: fileName }
+      });
+      return { success: true };
+    } catch (error) {
+      return { success: false, message: error?.message || 'Не удалось удалить резервную копию.' };
+    }
+  });
+
+  ipcMain.handle('backup:export', async (_, payload = {}) => {
+    try {
+      const backupId = String(payload.backupId || '').trim();
+      if (!backupId) {
+        return { success: false, message: 'Выберите резервную копию для экспорта.' };
+      }
+      const fileName = path.basename(backupId);
+      const sourcePath = path.join(resolveBackupsDir(), fileName);
+      if (!fs.existsSync(sourcePath)) {
+        return { success: false, message: 'Резервная копия не найдена.' };
+      }
+
+      const saveDialog = await dialog.showSaveDialog({
+        title: 'Экспорт резервной копии',
+        defaultPath: path.join(app.getPath('documents'), fileName),
+        filters: [{ name: 'SQLite database', extensions: ['sqlite', 'db'] }]
+      });
+
+      if (saveDialog.canceled || !saveDialog.filePath) {
+        return { success: false, canceled: true };
+      }
+
+      fs.copyFileSync(sourcePath, saveDialog.filePath);
+      repository.addAuditLog({
+        actionType: 'backup.export',
+        entityType: 'backup',
+        entityId: fileName,
+        actor,
+        summary: 'Экспортирована резервная копия',
+        payloadJson: { backupId: fileName, filePath: saveDialog.filePath }
+      });
+      return { success: true, filePath: saveDialog.filePath };
+    } catch (error) {
+      return { success: false, message: error?.message || 'Не удалось экспортировать резервную копию.' };
+    }
+  });
+
+  ipcMain.handle('database:import', async () => {
+    try {
+      const openDialog = await dialog.showOpenDialog({
+        title: 'Импорт базы данных',
+        properties: ['openFile'],
+        filters: [{ name: 'SQLite database', extensions: ['sqlite', 'db'] }]
+      });
+
+      if (openDialog.canceled || !openDialog.filePaths?.length) {
+        return { success: false, canceled: true };
+      }
+
+      const sourcePath = openDialog.filePaths[0];
+      repository.addAuditLog({
+        actionType: 'database.import',
+        entityType: 'database',
+        actor,
+        summary: 'Импортирована внешняя база данных',
+        payloadJson: { sourcePath }
+      });
+      closeDatabase();
+      fs.copyFileSync(sourcePath, getDbPath());
+      app.relaunch();
+      app.exit(0);
+      return { success: true, restarting: true };
+    } catch (error) {
+      return { success: false, message: error?.message || 'Не удалось импортировать базу данных.' };
+    }
+  });
+
   ipcMain.handle('dashboard:get', async () => getDashboardData());
 
   ipcMain.handle('cities:list', async () => repository.listCities());
@@ -245,6 +509,9 @@ function registerIpcHandlers() {
   ipcMain.handle('structure:list', async () => repository.listStructureTree());
 
   ipcMain.handle('children:list', async (_, filters) => repository.listChildren(filters));
+  ipcMain.handle('archive:list', async (_, filters) => repository.listArchivedEntities(filters || {}));
+  ipcMain.handle('archive:delete', async (_, payload) => repository.deleteArchivedEntity(payload || {}));
+  ipcMain.handle('archive:restore', async (_, payload) => repository.restoreArchivedEntity(payload || {}));
   ipcMain.handle('queue:list', async (_, filters) => repository.listQueueChildren(filters || {}));
   ipcMain.handle('queue:save', async (_, payload) => repository.saveQueueChild(payload));
   ipcMain.handle('queue:delete', async (_, id) => repository.deleteQueueChild(id));
@@ -272,6 +539,10 @@ function registerIpcHandlers() {
   ipcMain.handle('attendance:remove-date', async (_, payload) => repository.removeAttendanceDate(payload));
 
   ipcMain.handle('notifications:list', async () => getNotificationsList());
+  ipcMain.handle('audit:list', async (_, filters) => repository.listAuditLogs(filters || {}));
+  ipcMain.handle('audit:delete', async (_, id) => repository.deleteAuditLog(id));
+  ipcMain.handle('settings:get', async () => repository.getAppSettings());
+  ipcMain.handle('settings:save', async (_, payload) => repository.saveAppSettings(payload || {}));
 
   ipcMain.handle('whatsapp:settings-get', async () => {
     try {

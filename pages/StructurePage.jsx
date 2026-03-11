@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '@renderer/api';
 import EntityModal from '@components/EntityModal';
-import Modal from '@components/Modal';
 
 const weekdays = [
   { value: 1, label: 'Понедельник' },
@@ -32,20 +31,16 @@ export default function StructurePage() {
   const [selectedStudioId, setSelectedStudioId] = useState('');
   const [expandedCourseId, setExpandedCourseId] = useState('');
   const [activeGroupByCourse, setActiveGroupByCourse] = useState({});
-  const [groupSearchByCourse, setGroupSearchByCourse] = useState({});
-  const [copyTargetByCourse, setCopyTargetByCourse] = useState({});
   const [error, setError] = useState('');
 
   const [cityModal, setCityModal] = useState(null);
   const [studioModal, setStudioModal] = useState(null);
   const [courseModal, setCourseModal] = useState(null);
-  const [courseCardModal, setCourseCardModal] = useState(null);
   const [groupModal, setGroupModal] = useState(null);
 
   const [scheduleTarget, setScheduleTarget] = useState(null);
   const [scheduleRows, setScheduleRows] = useState([]);
   const [savingSchedule, setSavingSchedule] = useState(false);
-  const [copyingSchedule, setCopyingSchedule] = useState(false);
 
   async function load() {
     const structure = await api.listStructure();
@@ -188,25 +183,6 @@ export default function StructurePage() {
     }
   }
 
-  async function copyScheduleToGroup(course) {
-    if (!scheduleTarget?.groupId || Number(scheduleTarget.courseId) !== Number(course.id)) return;
-    const targetId = Number(copyTargetByCourse[course.id] || 0);
-    if (!targetId) return;
-    setCopyingSchedule(true);
-    try {
-      const items = scheduleRows
-        .filter((x) => x.startTime && x.endTime)
-        .map((x) => ({ weekday: Number(x.weekday), startTime: x.startTime, endTime: x.endTime }));
-      await api.saveGroupSchedule({ groupId: targetId, items });
-      await load();
-      setError('');
-    } catch (e) {
-      setError(e?.message || 'Не удалось скопировать расписание.');
-    } finally {
-      setCopyingSchedule(false);
-    }
-  }
-
   function goBack() {
     if (view === 'courses') {
       setView('studios');
@@ -256,7 +232,7 @@ export default function StructurePage() {
               <div key={city.id} className="structure-v3-row" onClick={() => openCity(city.id)}>
                 <div className="structure-v3-row-main">
                   <div className="structure-v3-row-title">{city.name}</div>
-                  <div className="structure-v3-row-meta">Студий: {city.studios?.length || 0}</div>
+                  <div className="structure-v3-row-meta">Студий: {city.studios?.length || 0} • Детей: {city.childrenCount || 0}</div>
                 </div>
                 <div className="icon-actions">
                   <button className="icon-btn" title="Редактировать" onClick={(e) => { e.stopPropagation(); setCityModal(city); }}>⋯</button>
@@ -274,7 +250,7 @@ export default function StructurePage() {
               <div key={studio.id} className="structure-v3-row" onClick={() => openStudio(studio.id)}>
                 <div className="structure-v3-row-main">
                   <div className="structure-v3-row-title">{studio.name}</div>
-                  <div className="structure-v3-row-meta">Кружков: {studio.courses?.length || 0}</div>
+                  <div className="structure-v3-row-meta">Кружков: {studio.courses?.length || 0} • Детей: {studio.childrenCount || 0}</div>
                 </div>
                 <div className="icon-actions">
                   <button className="icon-btn" title="Редактировать" onClick={(e) => { e.stopPropagation(); setStudioModal(studio); }}>⋯</button>
@@ -292,23 +268,15 @@ export default function StructurePage() {
               {(selectedStudio?.courses || []).map((course) => {
                 const expanded = String(expandedCourseId) === String(course.id);
                 const activeGroupId = activeGroupByCourse[course.id];
-                const groupQuery = String(groupSearchByCourse[course.id] || '').trim().toLowerCase();
-                const visibleGroups = (course.groups || []).filter((g) =>
-                  !groupQuery || String(g.name || '').toLowerCase().includes(groupQuery)
-                );
-                const copyOptions = (course.groups || []).filter(
-                  (g) => String(g.id) !== String(scheduleTarget?.groupId || '')
-                );
+                const visibleGroups = course.groups || [];
                 return (
                   <div key={course.id} className={`structure-v3-course${expanded ? ' expanded' : ''}`}>
                     <div className="structure-v3-course-head">
                       <button className="structure-v3-course-toggle" onClick={() => toggleCourse(course)}>
                         <span>{course.name}</span>
-                        <small>Групп: {course.groups?.length || 0}</small>
+                        <small>Групп: {course.groups?.length || 0} • Детей: {course.childrenCount || 0}</small>
                       </button>
                       <div className="row-actions">
-                        <button onClick={() => setGroupModal({ courseId: course.id })}>+ Группа</button>
-                        <button onClick={() => setCourseCardModal(course)}>Карточка</button>
                         <button onClick={() => setCourseModal(course)}>⋯</button>
                         <button onClick={() => remove('course', course.id, 'Удалить кружок?')}>🗑</button>
                       </div>
@@ -317,35 +285,7 @@ export default function StructurePage() {
                     {expanded && (
                       <div className="structure-v3-course-body">
                         <div className="structure-v3-course-tools">
-                          <input
-                            className="structure-v3-group-search"
-                            placeholder="Поиск группы..."
-                            value={groupSearchByCourse[course.id] || ''}
-                            onChange={(e) =>
-                              setGroupSearchByCourse((prev) => ({ ...prev, [course.id]: e.target.value }))
-                            }
-                          />
-                          {!!course.groups?.length && scheduleTarget?.courseId === course.id && scheduleTarget?.groupId && (
-                            <div className="structure-v3-copy-tools">
-                              <select
-                                value={copyTargetByCourse[course.id] || ''}
-                                onChange={(e) =>
-                                  setCopyTargetByCourse((prev) => ({ ...prev, [course.id]: e.target.value }))
-                                }
-                              >
-                                <option value="">Куда копировать расписание...</option>
-                                {copyOptions.map((g) => (
-                                  <option key={g.id} value={g.id}>{g.name}</option>
-                                ))}
-                              </select>
-                              <button
-                                onClick={() => copyScheduleToGroup(course)}
-                                disabled={!copyTargetByCourse[course.id] || copyingSchedule}
-                              >
-                                {copyingSchedule ? 'Копирование...' : 'Копировать'}
-                              </button>
-                            </div>
-                          )}
+                          <button onClick={() => setGroupModal({ courseId: course.id })}>+ Группа</button>
                         </div>
 
                         <div className="structure-v3-group-tabs">
@@ -353,15 +293,19 @@ export default function StructurePage() {
                             <button
                               key={group.id}
                               className={`structure-v3-group-tab${String(activeGroupId) === String(group.id) ? ' active' : ''}`}
-                              onClick={() => selectGroup(course, group)}
+                              onClick={() => {
+                                if (String(activeGroupId) === String(group.id)) {
+                                  setGroupModal(group);
+                                } else {
+                                  selectGroup(course, group);
+                                }
+                              }}
+                              title={String(activeGroupId) === String(group.id) ? 'Нажмите, чтобы изменить название группы' : 'Открыть группу'}
                             >
-                              {group.name}
+                              {group.name} <small>({group.childrenCount || 0})</small>
                             </button>
                           ))}
                           {!course.groups?.length && <div className="structure-v3-empty">Добавьте группу, чтобы настроить расписание.</div>}
-                          {!!course.groups?.length && !visibleGroups.length && (
-                            <div className="structure-v3-empty">По этому запросу группы не найдены.</div>
-                          )}
                         </div>
 
                         {!!course.groups?.length && scheduleTarget?.courseId === course.id && (
@@ -371,9 +315,28 @@ export default function StructurePage() {
                                 <div className="structure-v3-schedule-title">Расписание группы: {scheduleTarget.groupName}</div>
                                 <div className="structure-v3-schedule-meta">{scheduleRows.length ? scheduleLabel(scheduleRows) : 'Без расписания'}</div>
                               </div>
-                              <button className="primary" onClick={saveSchedule} disabled={savingSchedule}>
-                                {savingSchedule ? 'Сохранение...' : 'Сохранить'}
-                              </button>
+                              <div className="row-actions">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const currentGroup = (course.groups || []).find((g) => String(g.id) === String(scheduleTarget.groupId));
+                                    if (currentGroup) setGroupModal(currentGroup);
+                                  }}
+                                >
+                                  Изменить группу
+                                </button>
+                                <button
+                                  type="button"
+                                  className="danger"
+                                  onClick={() => remove('group', scheduleTarget.groupId, 'Удалить эту группу?')}
+                                  disabled={!scheduleTarget.groupId}
+                                >
+                                  Удалить группу
+                                </button>
+                                <button className="primary" onClick={saveSchedule} disabled={savingSchedule}>
+                                  {savingSchedule ? 'Сохранение...' : 'Сохранить'}
+                                </button>
+                              </div>
                             </div>
 
                             <div className="structure-v3-schedule-table">
@@ -509,32 +472,6 @@ export default function StructurePage() {
         />
       )}
 
-      {courseCardModal && (
-        <Modal title={`Карточка кружка: ${courseCardModal.name}`} onClose={() => setCourseCardModal(null)}>
-          <div className="course-profile-grid">
-            <div className="profile-card">
-              <b>Студия:</b>
-              <div>{selectedStudio?.name || '—'}</div>
-            </div>
-            <div className="profile-card">
-              <b>Город:</b>
-              <div>{selectedCity?.name || '—'}</div>
-            </div>
-            <div className="profile-card">
-              <b>Количество групп:</b>
-              <div>{courseCardModal.groups?.length || 0}</div>
-            </div>
-            <div className="profile-card full">
-              <b>Общее расписание:</b>
-              <div>
-                {courseCardModal.groups?.length
-                  ? courseCardModal.groups.map((group) => scheduleLabel(group.schedule)).filter(Boolean).join(' | ')
-                  : 'Без расписания'}
-              </div>
-            </div>
-          </div>
-        </Modal>
-      )}
     </section>
   );
 }

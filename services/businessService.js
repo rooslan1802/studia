@@ -1,6 +1,7 @@
 const { getDb } = require('../database');
 const { calculateAge, toIsoDate } = require('./childAge');
 const { getDamubalaConnectionStatus } = require('./damubalaSyncService');
+const repository = require('./repository');
 
 function monthRange(ym) {
   const [y, m] = ym.split('-').map(Number);
@@ -9,14 +10,30 @@ function monthRange(ym) {
   return { from, to };
 }
 
-function cycleProgress(totalAttended) {
-  if (!totalAttended) return 0;
-  return ((totalAttended - 1) % 8) + 1;
+function paymentConfigForCourse(courseId) {
+  const settings = repository.getAppSettings();
+  const payments = settings.payments || { defaultCycleLength: 8, defaultFirstPaymentLesson: 1, courseOverrides: [] };
+  const override = Array.isArray(payments.courseOverrides)
+    ? payments.courseOverrides.find((row) => Number(row.courseId) === Number(courseId))
+    : null;
+  return {
+    cycleLength: Math.max(1, Number(override?.cycleLength || payments.defaultCycleLength || 8)),
+    firstPaymentLesson: Math.max(1, Number(override?.firstPaymentLesson || payments.defaultFirstPaymentLesson || 1))
+  };
 }
 
-function requiredPayments(totalAttended) {
-  if (!totalAttended) return 0;
-  return 1 + Math.floor(totalAttended / 8);
+function paymentMetrics(totalAttended, paymentsDone, courseId) {
+  const config = paymentConfigForCourse(courseId);
+  const attended = Math.max(0, Number(totalAttended || 0));
+  const paid = Math.max(0, Number(paymentsDone || 0));
+  let required = 0;
+  if (attended >= config.firstPaymentLesson) {
+    required = 1 + Math.floor(Math.max(0, attended - config.firstPaymentLesson) / config.cycleLength);
+  }
+  const cycle = attended > 0
+    ? ((attended - 1) % config.cycleLength) + 1
+    : 0;
+  return { ...config, requiredPayments: required, cycleProgress: cycle };
 }
 
 function getPaymentsList(filters = {}) {
@@ -58,6 +75,7 @@ function getPaymentsList(filters = {}) {
         g.name AS groupName,
         pp.paymentStartDate,
         pp.enrollmentDate,
+        pp.lessonsCount AS profileLessonsCount,
         tx.id AS txId,
         tx.paidDate AS txPaidDate,
         tx.amount AS txAmount,
@@ -74,7 +92,6 @@ function getPaymentsList(filters = {}) {
           JOIN AttendanceSessions s ON s.id = r.sessionId
           WHERE r.childId = ch.id
             AND s.status = 'conducted'
-            AND s.sessionDate >= COALESCE(pp.paymentStartDate, pp.enrollmentDate)
             AND r.status IN ('present', 'absent-other', 'absent-valid')
         ) AS attendedTotal,
         (
@@ -83,12 +100,12 @@ function getPaymentsList(filters = {}) {
           JOIN AttendanceSessions s ON s.id = r.sessionId
           WHERE r.childId = ch.id
             AND s.status = 'conducted'
-            AND s.sessionDate >= COALESCE(pp.paymentStartDate, pp.enrollmentDate)
             AND r.status IN ('present', 'absent-other', 'absent-valid')
         ) AS lastAttendanceDate,
         pc.comment AS paymentComment,
         pc.promisedDate,
-        pc.status AS commentStatus
+        pc.status AS commentStatus,
+        pc.duePaymentIndex AS commentDuePaymentIndex
       FROM Children ch
       JOIN PaidProfile pp ON pp.childId = ch.id
       JOIN Studios st ON st.id = ch.studioId
@@ -120,26 +137,32 @@ function getPaymentsList(filters = {}) {
   const items = rows.map((row) => {
     const total = Number(row.attendedTotal || 0);
     const paid = Number(row.paymentsDone || 0);
-    const need = requiredPayments(total);
+    const metrics = paymentMetrics(total, paid, row.courseId);
+    const need = metrics.requiredPayments;
     const due = need > paid;
-    const cycle = cycleProgress(total);
+    const cycle = metrics.cycleProgress;
+    const promisedMatchesCurrentDebt = due && Number(row.commentDuePaymentIndex || 0) === Number(need || 0);
 
     let reason = '';
-    if (due && paid === 0 && total >= 1) {
-      reason = 'После первого занятия нужно оплатить пакет на 8 занятий';
+    if (due && paid === 0 && total >= metrics.firstPaymentLesson) {
+      reason = `Требуется первая оплата после ${metrics.firstPaymentLesson}-го занятия`;
     } else if (due) {
-      reason = 'Требуется оплата (наступило 8-е занятие цикла)';
+      reason = `Требуется оплата (цикл ${metrics.cycleLength} занятий)`;
     }
 
     return {
       ...row,
-      lessonsCount: cycle,
+      lessonsCount: Number(row.profileLessonsCount ?? cycle ?? 0),
       attendedTotal: total,
       paymentsDone: paid,
       requiredPayments: need,
+      cycleLength: metrics.cycleLength,
+      firstPaymentLesson: metrics.firstPaymentLesson,
       paymentState: due ? 'unpaid' : 'hidden',
       status: due ? 'overdue' : 'ok',
       reason,
+      paymentComment: promisedMatchesCurrentDebt ? row.paymentComment : '',
+      promisedDate: promisedMatchesCurrentDebt ? row.promisedDate : null,
       billingMonth: row.lastAttendanceDate
         ? row.lastAttendanceDate.slice(0, 7)
         : (row.paymentStartDate || row.enrollmentDate || toIsoDate(new Date())).slice(0, 7),
@@ -185,6 +208,7 @@ function getPaymentTransactions(filters = {}) {
         pp.childFullName,
         pp.parentFullName,
         pp.parentPhone,
+        pp.lessonsCount AS profileLessonsCount,
         city.id AS cityId,
         city.name AS cityName,
         co.id AS courseId,
@@ -202,12 +226,17 @@ function getPaymentTransactions(filters = {}) {
       ORDER BY pt.paidDate DESC, pt.id DESC
     `)
     .all(...params)
-    .map((row) => ({
-      ...row,
-      billingMonth: String(row.paidDate || '').slice(0, 7),
-      paidStatusLabel: `Оплачено (${Number(row.amount || 0).toLocaleString('ru-RU')} тг, ${row.paymentMethod || 'не указан'})`,
-      paymentState: 'paid'
-    }));
+    .map((row) => {
+      const config = paymentConfigForCourse(row.courseId);
+      return {
+        ...row,
+        lessonsCount: Number(row.profileLessonsCount || 0),
+        cycleLength: config.cycleLength,
+        billingMonth: String(row.paidDate || '').slice(0, 7),
+        paidStatusLabel: `Оплачено (${Number(row.amount || 0).toLocaleString('ru-RU')} тг, ${row.paymentMethod || 'не указан'})`,
+        paymentState: 'paid'
+      };
+    });
 }
 
 function getAttendanceSummary() {

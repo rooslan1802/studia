@@ -2,6 +2,13 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
   getDashboard: () => ipcRenderer.invoke('dashboard:get'),
+  listBackups: () => ipcRenderer.invoke('backup:list'),
+  createBackup: () => ipcRenderer.invoke('backup:create'),
+  restoreBackup: (payload) => ipcRenderer.invoke('backup:restore', payload),
+  deleteBackup: (payload) => ipcRenderer.invoke('backup:delete', payload),
+  exportBackup: (payload) => ipcRenderer.invoke('backup:export', payload),
+  exportDatabase: () => ipcRenderer.invoke('database:export'),
+  importDatabase: () => ipcRenderer.invoke('database:import'),
 
   listCities: () => ipcRenderer.invoke('cities:list'),
   saveCity: (payload) => ipcRenderer.invoke('cities:save', payload),
@@ -25,6 +32,9 @@ contextBridge.exposeInMainWorld('api', {
   listStructure: () => ipcRenderer.invoke('structure:list'),
 
   listChildren: (filters) => ipcRenderer.invoke('children:list', filters),
+  listArchivedEntities: (filters) => ipcRenderer.invoke('archive:list', filters),
+  deleteArchivedEntity: (payload) => ipcRenderer.invoke('archive:delete', payload),
+  restoreArchivedEntity: (payload) => ipcRenderer.invoke('archive:restore', payload),
   listQueueChildren: (filters) => ipcRenderer.invoke('queue:list', filters),
   saveQueueChild: (payload) => ipcRenderer.invoke('queue:save', payload),
   deleteQueueChild: (id) => ipcRenderer.invoke('queue:delete', id),
@@ -52,6 +62,20 @@ contextBridge.exposeInMainWorld('api', {
   removeAttendanceDate: (payload) => ipcRenderer.invoke('attendance:remove-date', payload),
 
   listNotifications: () => ipcRenderer.invoke('notifications:list'),
+  listAuditLogs: (filters) => ipcRenderer.invoke('audit:list', filters),
+  deleteAuditLog: (id) => ipcRenderer.invoke('audit:delete', id),
+  getSettings: () => ipcRenderer.invoke('settings:get'),
+  saveSettings: (payload) => ipcRenderer.invoke('settings:save', payload),
+  getUpdateStatus: () => ipcRenderer.invoke('app:updates:status'),
+  checkForUpdates: () => ipcRenderer.invoke('app:updates:check'),
+  downloadUpdate: () => ipcRenderer.invoke('app:updates:download'),
+  installUpdate: () => ipcRenderer.invoke('app:updates:install'),
+  onUpdateState: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_, payload) => callback(payload || {});
+    ipcRenderer.on('app:update-state', listener);
+    return () => ipcRenderer.removeListener('app:update-state', listener);
+  },
 
   getWhatsAppSettings: () => ipcRenderer.invoke('whatsapp:settings-get'),
   saveWhatsAppSettings: (payload) => ipcRenderer.invoke('whatsapp:settings-save', payload),

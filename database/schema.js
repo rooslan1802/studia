@@ -111,7 +111,7 @@ CREATE TABLE IF NOT EXISTS AttendanceRecords (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   sessionId INTEGER NOT NULL,
   childId INTEGER NOT NULL,
-  status TEXT NOT NULL CHECK(status IN ('present', 'absent-valid', 'absent-other')),
+  status TEXT NOT NULL CHECK(status IN ('present', 'absent-valid', 'absent-other', 'sick')),
   note TEXT,
   FOREIGN KEY (sessionId) REFERENCES AttendanceSessions(id) ON DELETE CASCADE,
   FOREIGN KEY (childId) REFERENCES Children(id) ON DELETE CASCADE,
@@ -130,10 +130,62 @@ CREATE TABLE IF NOT EXISTS QueueChildren (
   phone TEXT NOT NULL,
   queueDate TEXT NOT NULL,
   queueNumber INTEGER NOT NULL,
+  previousQueueNumber TEXT,
+  queueShift INTEGER,
+  queueUpdatedAt TEXT,
   queueCategory TEXT NOT NULL,
   createdAt TEXT NOT NULL,
   FOREIGN KEY (cityId) REFERENCES Cities(id) ON DELETE CASCADE,
   FOREIGN KEY (studioId) REFERENCES Studios(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS PipelineStages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  entityType TEXT NOT NULL CHECK(entityType IN ('child', 'queue')),
+  entityId INTEGER NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('queue', 'voucher-approved', 'attending', 'risk', 'churned')),
+  managerName TEXT,
+  taskText TEXT,
+  deadlineDate TEXT,
+  churnReason TEXT,
+  taskDone INTEGER NOT NULL DEFAULT 0,
+  taskDoneAt TEXT,
+  taskDoneBy TEXT,
+  updatedAt TEXT NOT NULL,
+  UNIQUE(entityType, entityId)
+);
+
+CREATE TABLE IF NOT EXISTS PipelineStatusHistory (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  entityType TEXT NOT NULL CHECK(entityType IN ('child', 'queue')),
+  entityId INTEGER NOT NULL,
+  fromStatus TEXT,
+  toStatus TEXT NOT NULL CHECK(toStatus IN ('queue', 'voucher-approved', 'attending', 'risk', 'churned')),
+  reason TEXT,
+  changedBy TEXT NOT NULL,
+  changedAt TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS PipelineAutoTaskCompletions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  entityType TEXT NOT NULL CHECK(entityType IN ('child', 'queue')),
+  entityId INTEGER NOT NULL,
+  taskType TEXT NOT NULL,
+  taskSignature TEXT NOT NULL,
+  completedBy TEXT,
+  completedAt TEXT NOT NULL,
+  UNIQUE(entityType, entityId, taskType, taskSignature)
+);
+
+CREATE TABLE IF NOT EXISTS AuditLogs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  actionType TEXT NOT NULL,
+  entityType TEXT,
+  entityId TEXT,
+  actor TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  payloadJson TEXT,
+  createdAt TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS PaymentComments (
@@ -141,6 +193,7 @@ CREATE TABLE IF NOT EXISTS PaymentComments (
   childId INTEGER NOT NULL,
   comment TEXT NOT NULL,
   promisedDate TEXT,
+  duePaymentIndex INTEGER,
   status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'paid')),
   paidDate TEXT,
   paidOnTime INTEGER,
@@ -157,6 +210,20 @@ CREATE TABLE IF NOT EXISTS PaymentTransactions (
   comment TEXT,
   paymentMethod TEXT,
   cycleLessons INTEGER NOT NULL DEFAULT 0,
+  createdAt TEXT NOT NULL,
+  FOREIGN KEY (childId) REFERENCES Children(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS ChildGroupTransfers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  childId INTEGER NOT NULL,
+  fromStudioId INTEGER,
+  fromCourseId INTEGER,
+  fromGroupId INTEGER,
+  toStudioId INTEGER,
+  toCourseId INTEGER,
+  toGroupId INTEGER,
+  effectiveDate TEXT NOT NULL,
   createdAt TEXT NOT NULL,
   FOREIGN KEY (childId) REFERENCES Children(id) ON DELETE CASCADE
 );
@@ -181,6 +248,22 @@ CREATE TABLE IF NOT EXISTS UserWhatsAppConfig (
   whatsappApiKey TEXT NOT NULL,
   whatsappPhoneId TEXT NOT NULL,
   createdAt TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ArchivedEntities (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  entityType TEXT NOT NULL CHECK(entityType IN ('child', 'queue')),
+  entityCategory TEXT NOT NULL,
+  entityName TEXT NOT NULL,
+  sourceId INTEGER,
+  snapshotJson TEXT NOT NULL,
+  deletedAt TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS AppSettings (
+  key TEXT PRIMARY KEY,
+  valueJson TEXT NOT NULL,
+  updatedAt TEXT NOT NULL
 );
 `;
 
