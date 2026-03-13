@@ -12,7 +12,6 @@ import AttendancePage from '@pages/AttendancePage';
 import NotificationsPage from '@pages/NotificationsPage';
 import WhatsAppPage from '@pages/WhatsAppPage';
 import WhatsAppSettings from '@pages/WhatsAppSettings';
-import DamubalaHelperPage from '@pages/DamubalaHelperPage';
 import SettingsPage from '@pages/SettingsPage';
 
 const BACKEND_URLS = ['http://localhost:47831', 'http://127.0.0.1:47831'];
@@ -41,8 +40,7 @@ const pageTitles = {
   '/settings': 'Настройки',
   '/notifications': 'Уведомления',
   '/whatsapp': 'WhatsApp Рассылка',
-  '/whatsapp-settings': 'Подключение WhatsApp',
-  '/damubala-helper': 'Дамубала помощник'
+  '/whatsapp-settings': 'Подключение WhatsApp'
 };
 
 function ChevronIcon({ collapsed }) {
@@ -284,7 +282,6 @@ export default function App() {
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/whatsapp-settings" element={<WhatsAppSettings />} />
           <Route path="/whatsapp" element={<WhatsAppPage />} />
-          <Route path="/damubala-helper" element={<DamubalaHelperPage />} />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
         {findOpen && (

@@ -463,7 +463,9 @@ function initializeDatabase(dbPath) {
   db = new Database(dbPath);
   db.exec(schemaSql);
   migrate(db);
-  seedData(db);
+  if (process.env.STUDIA_SEED_DEMO === '1') {
+    seedData(db);
+  }
   return db;
 }
 
