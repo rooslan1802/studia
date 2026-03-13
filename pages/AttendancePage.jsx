@@ -2,8 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '@renderer/api';
 import Modal from '@components/Modal';
 
-const markCycle = ['', 'present', 'absent-other'];
-const markView = { '': '', present: '✓', 'absent-other': '✕' };
+const markCycle = ['', 'present', 'absent-other', 'sick'];
+const markView = { '': '', present: '✓', 'absent-other': '✕', sick: 'Б' };
 
 function monthStartIso(offset = 0) {
   const now = new Date();
@@ -25,6 +25,26 @@ function monthEndIso(offset = 0) {
 
 function monthIso(offset = 0) {
   return monthStartIso(offset).slice(0, 7);
+}
+
+function toIsoDateInput(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function todayIso() {
+  return toIsoDateInput(new Date());
+}
+
+function addDays(baseIso, days) {
+  const date = new Date(`${baseIso}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return baseIso;
+  date.setDate(date.getDate() + Number(days || 0));
+  return toIsoDateInput(date);
 }
 
 function nextMark(value) {
@@ -63,9 +83,18 @@ function calendarDays(isoMonthStart) {
   return cells;
 }
 
+function isChildLockedForDate(child, date) {
+  const meta = child?.transferMeta;
+  if (!meta?.effectiveDate) return false;
+  if (meta.mode === 'out') return String(date) >= String(meta.effectiveDate);
+  if (meta.mode === 'in') return String(date) < String(meta.effectiveDate);
+  return false;
+}
+
 export default function AttendancePage() {
   const [view, setView] = useState('boards');
   const [cities, setCities] = useState([]);
+  const [studios, setStudios] = useState([]);
   const [courses, setCourses] = useState([]);
   const [groups, setGroups] = useState([]);
 
@@ -87,10 +116,14 @@ export default function AttendancePage() {
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [selectedChild, setSelectedChild] = useState(null);
+  const [transferModalData, setTransferModalData] = useState(null);
+  const [transferGroupsList, setTransferGroupsList] = useState([]);
+  const [transferSaving, setTransferSaving] = useState(false);
 
   async function loadMeta() {
-    const [cityList, courseList] = await Promise.all([api.listCities(), api.listCourses()]);
+    const [cityList, studioList, courseList] = await Promise.all([api.listCities(), api.listStudios(), api.listCourses()]);
     setCities(cityList);
+    setStudios(studioList);
     setCourses(courseList);
     if (!cityId && cityList.length) setCityId(String(cityList[0].id));
   }
@@ -165,10 +198,37 @@ export default function AttendancePage() {
     if (view === 'sheet') loadSheet();
   }, [view, groupId, dateFrom, dateTo]);
 
+  useEffect(() => {
+    if (!transferModalData?.courseId) {
+      setTransferGroupsList([]);
+      return undefined;
+    }
+    let cancelled = false;
+    api.listGroups(Number(transferModalData.courseId))
+      .then((list) => {
+        if (!cancelled) setTransferGroupsList(Array.isArray(list) ? list : []);
+      })
+      .catch(() => {
+        if (!cancelled) setTransferGroupsList([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [transferModalData?.courseId]);
+
   const filteredCourses = useMemo(
     () => courses.filter((c) => !cityId || Number(c.cityId) === Number(cityId)),
     [courses, cityId]
   );
+  const transferStudios = useMemo(
+    () => studios.filter((studio) => !transferModalData?.cityId || Number(studio.cityId) === Number(transferModalData.cityId)),
+    [studios, transferModalData?.cityId]
+  );
+  const transferCourses = useMemo(
+    () => courses.filter((course) => !transferModalData?.studioId || Number(course.studioId) === Number(transferModalData.studioId)),
+    [courses, transferModalData?.studioId]
+  );
+  const transferGroups = useMemo(() => transferGroupsList, [transferGroupsList]);
 
   async function saveSingleDate(date, nextState, nextMarks) {
     if (!groupId) return;
@@ -178,13 +238,13 @@ export default function AttendancePage() {
     if (sState === 'cancelled') {
       entry = { date, sessionStatus: 'cancelled', records: [] };
     } else {
-      const records = sheet.children
-        .map((child) => ({
-          childId: child.childId,
-          status: nextMarks[child.childId]?.[date] || '',
-          note: ''
-        }))
-        .filter((x) => x.status === 'present' || x.status === 'absent-other' || x.status === 'absent-valid');
+        const records = sheet.children
+          .map((child) => ({
+            childId: child.childId,
+            status: nextMarks[child.childId]?.[date] || '',
+            note: ''
+          }))
+        .filter((x) => x.status === 'present' || x.status === 'absent-other' || x.status === 'absent-valid' || x.status === 'sick');
 
       entry = {
         date,
@@ -206,6 +266,8 @@ export default function AttendancePage() {
   }
 
   async function onCellClick(childId, date) {
+    const child = sheet.children.find((row) => Number(row.childId) === Number(childId));
+    if (isChildLockedForDate(child, date)) return;
     const current = marks[childId]?.[date] || '';
     const next = nextMark(current);
     const nextMarks = {
@@ -222,6 +284,7 @@ export default function AttendancePage() {
   async function applyForDay(date, mark) {
     const nextMarks = { ...marks };
     sheet.children.forEach((child) => {
+      if (isChildLockedForDate(child, date)) return;
       nextMarks[child.childId] = {
         ...(nextMarks[child.childId] || {}),
         [date]: mark
@@ -255,10 +318,54 @@ export default function AttendancePage() {
     if (full) setSelectedChild(full);
   }
 
+  function openTransferModal(child) {
+    if (!child || child.type !== 'paid') return;
+    setTransferModalData({
+      childId: child.id,
+      cityId: String(child.cityId || cityId || ''),
+      studioId: String(child.studioId || ''),
+      courseId: String(child.courseId || ''),
+      groupId: String(child.groupId || ''),
+      effectiveDate: addDays(todayIso(), 1)
+    });
+  }
+
+  async function submitTransferChild() {
+    if (!selectedChild || !transferModalData) return;
+    if (!transferModalData.studioId || !transferModalData.courseId || !transferModalData.groupId || !transferModalData.effectiveDate) {
+      setError('Заполните студию, кружок, группу и дату перевода.');
+      return;
+    }
+    setTransferSaving(true);
+    try {
+      await api.saveChild({
+        id: selectedChild.id,
+        studioId: Number(transferModalData.studioId),
+        courseId: Number(transferModalData.courseId),
+        groupId: Number(transferModalData.groupId),
+        transferEffectiveDate: transferModalData.effectiveDate,
+        type: selectedChild.type,
+        messageTag: selectedChild.messageTag || '',
+        profile: selectedChild.profile
+      });
+      const refreshed = await api.getChild(selectedChild.id);
+      if (refreshed) setSelectedChild(refreshed);
+      setTransferModalData(null);
+      await loadSheet();
+      await loadBoards();
+      setError('');
+    } catch (e) {
+      setError(e?.message || 'Не удалось перевести ребенка.');
+    } finally {
+      setTransferSaving(false);
+    }
+  }
+
   async function clearDayMarks(date) {
     if (!groupId) return;
     const nextMarks = { ...marks };
     sheet.children.forEach((child) => {
+      if (isChildLockedForDate(child, date)) return;
       nextMarks[child.childId] = {
         ...(nextMarks[child.childId] || {}),
         [date]: ''
@@ -376,6 +483,7 @@ export default function AttendancePage() {
                       <div className="day-actions compact">
                         <button onClick={() => applyForDay(d.date, 'present')}>✓</button>
                         <button onClick={() => applyForDay(d.date, 'absent-other')}>✕</button>
+                        <button onClick={() => applyForDay(d.date, 'sick')}>Б</button>
                         <button className="danger" onClick={() => cancelDay(d.date)}>Отм</button>
                         <button className="muted" onClick={() => clearDayMarks(d.date)}>Сбр.</button>
                       </div>
@@ -393,15 +501,21 @@ export default function AttendancePage() {
                       title={child.childName}
                       style={{ cursor: 'pointer' }}
                     >
-                      {child.childName}
+                      <div>{child.childName}</div>
+                      {child.transferMeta?.note ? (
+                        <div style={{ fontSize: 11, color: '#8fb0d8', marginTop: 4 }}>{child.transferMeta.note}</div>
+                      ) : null}
                     </td>
                     {sheet.dates.map((d) => {
                       const sState = sessionState[d.date] || '';
                       const val = marks[child.childId]?.[d.date] || '';
+                      const locked = isChildLockedForDate(child, d.date);
                       return (
                         <td key={`${child.childId}-${d.date}`} className="date-head">
                           {sState === 'cancelled' ? (
                             <span style={{ color: '#ff6978' }}>Отм</span>
+                          ) : locked ? (
+                            <span style={{ color: '#6f87aa', fontSize: 11 }}>→</span>
                           ) : (
                             <button className="attendance-mark" onClick={() => onCellClick(child.childId, d.date)}>{markView[val]}</button>
                           )}
@@ -422,6 +536,7 @@ export default function AttendancePage() {
             <div className="legend-row">
               <span className="legend-pill"><b>✓</b> посещение</span>
               <span className="legend-pill"><b>✕</b> пропуск</span>
+              <span className="legend-pill"><b>Б</b> больничный</span>
               <span className="legend-pill"><b>Отм</b> отмена занятия студией</span>
             </div>
             <div className="legend-row">
@@ -493,7 +608,7 @@ export default function AttendancePage() {
               <div className="child-sheet-grid" style={{ marginTop: 10 }}>
                 <div className="child-sheet-row"><span>Последняя оплата</span><b>{selectedChild.profile?.lastPaymentDate || '—'}</b></div>
                 <div className="child-sheet-row"><span>Уроков после оплаты</span><b>{selectedChild.profile?.lessonsCount ?? '—'}</b></div>
-                <div className="child-sheet-row"><span>Текущий цикл</span><b>{selectedChild.profile?.lessonsCount ?? 0}/8</b></div>
+                <div className="child-sheet-row"><span>Текущий цикл</span><b>{selectedChild.profile?.lessonsCount ?? 0}/{selectedChild.profile?.cycleLength || 8}</b></div>
               </div>
             )}
             {selectedChild.type === 'voucher' && (
@@ -502,6 +617,89 @@ export default function AttendancePage() {
                 <div className="child-sheet-row"><span>Email родителя</span><b>{selectedChild.profile?.parentEmail || '—'}</b></div>
               </div>
             )}
+            {selectedChild.type === 'paid' && (
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+                <button type="button" className="primary" onClick={() => openTransferModal(selectedChild)}>
+                  Перевести в другую группу
+                </button>
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {transferModalData && selectedChild?.type === 'paid' && (
+        <Modal title="Перевод в другую группу" onClose={() => !transferSaving && setTransferModalData(null)}>
+          <div className="form-grid">
+            <label>
+              Город
+              <select
+                value={transferModalData.cityId || ''}
+                onChange={(e) => setTransferModalData((prev) => ({
+                  ...prev,
+                  cityId: e.target.value,
+                  studioId: '',
+                  courseId: '',
+                  groupId: ''
+                }))}
+              >
+                <option value="">Выберите город</option>
+                {cities.map((city) => <option key={city.id} value={city.id}>{city.name}</option>)}
+              </select>
+            </label>
+            <label>
+              Студия
+              <select
+                value={transferModalData.studioId || ''}
+                onChange={(e) => setTransferModalData((prev) => ({
+                  ...prev,
+                  studioId: e.target.value,
+                  courseId: '',
+                  groupId: ''
+                }))}
+              >
+                <option value="">Выберите студию</option>
+                {transferStudios.map((studio) => <option key={studio.id} value={studio.id}>{studio.name}</option>)}
+              </select>
+            </label>
+            <label>
+              Кружок
+              <select
+                value={transferModalData.courseId || ''}
+                onChange={(e) => setTransferModalData((prev) => ({
+                  ...prev,
+                  courseId: e.target.value,
+                  groupId: ''
+                }))}
+              >
+                <option value="">Выберите кружок</option>
+                {transferCourses.map((course) => <option key={course.id} value={course.id}>{course.name}</option>)}
+              </select>
+            </label>
+            <label>
+              Группа
+              <select
+                value={transferModalData.groupId || ''}
+                onChange={(e) => setTransferModalData((prev) => ({ ...prev, groupId: e.target.value }))}
+              >
+                <option value="">Выберите группу</option>
+                {transferGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+              </select>
+            </label>
+            <label>
+              Дата перевода
+              <input
+                type="date"
+                value={transferModalData.effectiveDate || ''}
+                onChange={(e) => setTransferModalData((prev) => ({ ...prev, effectiveDate: e.target.value }))}
+              />
+            </label>
+            <div className="full" style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+              <button type="button" className="muted" onClick={() => setTransferModalData(null)} disabled={transferSaving}>Отмена</button>
+              <button type="button" className="primary" onClick={submitTransferChild} disabled={transferSaving}>
+                {transferSaving ? 'Перевод...' : 'Сохранить перевод'}
+              </button>
+            </div>
           </div>
         </Modal>
       )}

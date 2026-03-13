@@ -54,6 +54,36 @@ function ageFromBirthDate(iso) {
   return Math.max(0, age);
 }
 
+function buildProfileForType(nextType, currentProfile = {}) {
+  if (nextType === 'voucher') {
+    return {
+      ...initialVoucher,
+      childFullName: currentProfile.childFullName || '',
+      childIIN: currentProfile.childIIN || '',
+      childBirthDate: currentProfile.childBirthDate || '',
+      manualAge: currentProfile.manualAge ?? '',
+      parentPhone: currentProfile.parentPhone || '',
+      parentFullName: currentProfile.parentFullName || '',
+      enrollmentDate: currentProfile.enrollmentDate || '',
+      parentIIN: currentProfile.parentIIN || '',
+      parentEmail: currentProfile.parentEmail || ''
+    };
+  }
+
+  return {
+    ...initialPaid,
+    childFullName: currentProfile.childFullName || '',
+    childIIN: currentProfile.childIIN || '',
+    childBirthDate: currentProfile.childBirthDate || '',
+    manualAge: currentProfile.manualAge ?? '',
+    parentPhone: currentProfile.parentPhone || '',
+    parentFullName: currentProfile.parentFullName || '',
+    enrollmentDate: currentProfile.enrollmentDate || '',
+    lessonsCount: Number(currentProfile.lessonsCount || 0),
+    lastPaymentDate: currentProfile.lastPaymentDate || ''
+  };
+}
+
 export default function ChildModal({ data, studios, courses, groups, onClose, onSubmit }) {
   const [error, setError] = useState('');
   const [form, setForm] = useState({
@@ -92,12 +122,19 @@ export default function ChildModal({ data, studios, courses, groups, onClose, on
   const hasIin = String(form.profile.childIIN || '').trim().length > 0;
   const calculatedBirthDate = hasIin ? parseBirthDateFromIin(form.profile.childIIN) : form.profile.childBirthDate;
   const calculatedAge = calculatedBirthDate ? ageFromBirthDate(calculatedBirthDate) : form.profile.manualAge;
+  const messageTagPreset = useMemo(() => {
+    const normalized = String(form.messageTag || '').trim().toLowerCase();
+    if (!normalized) return '';
+    if (normalized === 'qr') return 'qr';
+    if (normalized === 'reminder' || normalized === 'напоминание') return 'reminder';
+    return 'custom';
+  }, [form.messageTag]);
 
   function switchType(newType) {
     setForm((prev) => ({
       ...prev,
       type: newType,
-      profile: newType === 'voucher' ? initialVoucher : initialPaid
+      profile: buildProfileForType(newType, prev.profile)
     }));
   }
 
@@ -202,12 +239,32 @@ export default function ChildModal({ data, studios, courses, groups, onClose, on
           </label>
 
           <label>
-            <div style={{ marginBottom: 6, color: '#97a7c3' }}>Пометка</div>
-            <select value={form.messageTag || ''} onChange={(e) => setForm((prev) => ({ ...prev, messageTag: e.target.value }))}>
+            <div style={{ marginBottom: 6, color: '#97a7c3' }}>Тип пометки</div>
+            <select
+              value={messageTagPreset}
+              onChange={(e) => {
+                const next = e.target.value;
+                setForm((prev) => ({
+                  ...prev,
+                  messageTag: next === 'custom' ? (messageTagPreset === 'custom' ? prev.messageTag : '') : next
+                }));
+              }}
+            >
               <option value="">Без пометки</option>
               <option value="qr">QR</option>
               <option value="reminder">Напоминание</option>
+              <option value="custom">Своя пометка</option>
             </select>
+          </label>
+
+          <label>
+            <div style={{ marginBottom: 6, color: '#97a7c3' }}>Своя пометка</div>
+            <input
+              value={messageTagPreset === 'custom' ? form.messageTag || '' : ''}
+              onChange={(e) => setForm((prev) => ({ ...prev, messageTag: e.target.value }))}
+              placeholder="Например: позвонить"
+              disabled={messageTagPreset !== 'custom'}
+            />
           </label>
 
           <label>

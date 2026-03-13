@@ -136,7 +136,7 @@ export default function WhatsAppPage() {
 
   const qrRecipients = useMemo(
     () => allChildren
-      .filter((x) => x.messageTag === 'qr')
+      .filter((x) => String(x.messageTag || '').trim().toLowerCase() === 'qr')
       .map((x) => ({
         id: `qr-${x.id}`,
         childId: x.id,
@@ -155,7 +155,7 @@ export default function WhatsAppPage() {
 
   const reminderRecipients = useMemo(
     () => allChildren
-      .filter((x) => x.messageTag === 'reminder')
+      .filter((x) => String(x.messageTag || '').trim().toLowerCase() === 'reminder')
       .map((x) => ({
         id: `rem-${x.id}`,
         childId: x.id,

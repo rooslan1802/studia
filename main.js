@@ -40,14 +40,6 @@ let updateState = {
   message: ''
 };
 
-function normalizeUpdaterError(error) {
-  const raw = String(error?.message || error || '').trim();
-  if (/Unable to find latest version on GitHub|Cannot parse releases feed|production release exists|\/releases\/latest/i.test(raw)) {
-    return 'На GitHub пока нет готового релиза обновления для приложения. Нужен обычный Release с файлами latest-mac.yml и mac zip, загруженный через electron-builder.';
-  }
-  return raw || 'Не удалось проверить обновления.';
-}
-
 function sendUpdateState() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.webContents.send('app:update-state', updateState);
@@ -146,7 +138,7 @@ function configureAutoUpdater() {
     setUpdateState({
       checking: false,
       downloading: false,
-      message: normalizeUpdaterError(error)
+      message: error?.message || 'Не удалось проверить обновления.'
     });
   });
 
@@ -155,18 +147,8 @@ function configureAutoUpdater() {
     if (isDev) {
       throw new Error('Проверка обновлений доступна только в собранном приложении.');
     }
-    try {
-      await autoUpdater.checkForUpdates();
-      return updateState;
-    } catch (error) {
-      const message = normalizeUpdaterError(error);
-      setUpdateState({
-        checking: false,
-        downloading: false,
-        message
-      });
-      throw new Error(message);
-    }
+    await autoUpdater.checkForUpdates();
+    return updateState;
   });
   ipcMain.handle('app:updates:download', async () => {
     if (isDev) {

@@ -5,6 +5,10 @@ function toIsoDate(date) {
   return `${y}-${m}-${d}`;
 }
 
+function toIsoDateTime(date) {
+  return new Date(date).toISOString();
+}
+
 function parseDate(value) {
   if (!value) {
     return null;
@@ -98,6 +102,7 @@ function calculateAge({ childIIN, childBirthDate, manualAge, manualAgeSetDate },
 
 module.exports = {
   toIsoDate,
+  toIsoDateTime,
   parseBirthDateFromIIN,
   calculateAge,
   fullYearsBetween

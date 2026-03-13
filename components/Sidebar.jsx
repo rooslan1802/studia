@@ -10,6 +10,7 @@ const navItems = [
   { to: '/attendance', label: 'Мои табели', icon: AttendanceIcon },
   { to: '/damubala-helper', label: 'Дамубала помощник', icon: QrIcon },
   { to: '/payments', label: 'Оплаты', icon: MoneyIcon },
+  { to: '/audit', label: 'Аудит', icon: AuditIcon },
   { to: '/whatsapp', label: 'WhatsApp', icon: WhatsAppIcon }
 ];
 
@@ -49,6 +50,14 @@ function MoneyIcon() {
   return (
     <svg viewBox="0 0 24 24" width="20" height="20" fill="none" aria-hidden="true">
       <path d="M4.5 7.5h15v9h-15zM8 12h8M7 10.2h0M17 13.8h0" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function AuditIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" aria-hidden="true">
+      <path d="M7 4.5h8l2.5 2.5v12H7zM9.5 9.5h6M9.5 12.5h6M9.5 15.5h4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

@@ -1,6 +1,6 @@
 {
   "name": "studia-manager",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Local desktop app for managing children's creative studios",
   "main": "main/main.js",
   "author": "",
@@ -14,7 +14,8 @@
     "dev:electron": "wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
     "build": "npm run build:renderer",
     "build:renderer": "vite build --config renderer/vite.config.js",
-    "build:mac": "npm run build:renderer && electron-builder --mac",
+    "build:mac": "npm run build:renderer && electron-builder --mac dmg zip --publish never",
+    "release:mac": "npm run build:renderer && electron-builder --mac dmg zip --publish always",
     "postinstall": "electron-builder install-app-deps"
   },
   "build": {
@@ -25,14 +26,27 @@
     },
     "mac": {
       "target": [
-        "dmg"
+        "dmg",
+        "zip"
       ],
-      "category": "public.app-category.business"
+      "category": "public.app-category.business",
+      "icon": "build/app.icns"
+    },
+    "dmg": {
+      "artifactName": "${productName}-${version}.${ext}"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "rooslan1802",
+      "repo": "studia",
+      "releaseType": "release"
     }
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^7.0.0-rc.9",
     "better-sqlite3": "^11.10.0",
+    "dotenv": "^17.3.1",
+    "electron-updater": "^6.8.3",
     "jspdf": "^4.2.0",
     "jspdf-autotable": "^5.0.7",
     "qrcode": "^1.5.4",
@@ -47,6 +61,7 @@
     "cross-env": "^7.0.3",
     "electron": "^35.0.0",
     "electron-builder": "^25.1.8",
+    "icon-gen": "^5.0.0",
     "vite": "^5.4.19",
     "wait-on": "^8.0.3"
   }

@@ -1,8 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@renderer/api';
 import Modal from '@components/Modal';
-
-const BACKEND_URLS = ['http://localhost:47831', 'http://127.0.0.1:47831'];
 
 function todayIso() {
   const d = new Date();
@@ -10,6 +8,36 @@ function todayIso() {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
+}
+
+function addDaysIso(baseIso, days = 0) {
+  const base = new Date(`${baseIso}T00:00:00`);
+  if (Number.isNaN(base.getTime())) return baseIso;
+  base.setDate(base.getDate() + Number(days || 0));
+  const y = base.getFullYear();
+  const m = String(base.getMonth() + 1).padStart(2, '0');
+  const day = String(base.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function normalizeDateKey(value) {
+  const source = String(value || '').trim();
+  if (!source) return '';
+  const isoMatch = source.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (isoMatch?.[1]) return isoMatch[1];
+  const ruMatch = source.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  if (ruMatch) return `${ruMatch[3]}-${ruMatch[2]}-${ruMatch[1]}`;
+  const parsed = new Date(source);
+  if (Number.isNaN(parsed.getTime())) return '';
+  return parsed.toISOString().slice(0, 10);
+}
+
+function normalizeMonthKey(value) {
+  const source = String(value || '').trim();
+  if (!source) return '';
+  const m = source.match(/^(\d{4})-(\d{2})/);
+  if (m) return `${m[1]}-${m[2]}`;
+  return '';
 }
 
 function monthIso(offset = 0) {
@@ -25,46 +53,10 @@ function monthTitle(ym) {
   return new Date(y, m - 1, 1).toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
 }
 
-function cycleTo8(absoluteLesson) {
-  const value = Number(absoluteLesson || 0);
-  if (value <= 0) return 0;
-  if (value === 1) return 1;
-  return ((value - 1) % 8) + 1;
-}
-
-function normalizePhone(phone) {
-  return String(phone || '').replace(/\D/g, '');
-}
-
-function greetingByTime(now = new Date()) {
-  const hour = now.getHours();
-  if (hour >= 5 && hour < 12) return 'Доброе утро';
-  if (hour >= 12 && hour < 18) return 'Добрый день';
-  return 'Добрый вечер';
-}
-
-function renderTemplate(template, childName) {
-  return String(template || '')
-    .replaceAll('{greeting}', greetingByTime())
-    .replaceAll('{childName}', String(childName || '').trim());
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function fetchBackendJson(path, init) {
-  let lastError = null;
-  for (const baseUrl of BACKEND_URLS) {
-    try {
-      const response = await fetch(`${baseUrl}${path}`, init);
-      const data = await response.json();
-      return { ok: response.ok, data };
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  throw lastError || new Error('Failed to fetch');
+function formatCycleProgress(progress, cycleLength) {
+  const current = Math.max(0, Number(progress || 0));
+  const total = Math.max(1, Number(cycleLength || 8));
+  return `${current}/${total}`;
 }
 
 function groupByMonthAndParent(items) {
@@ -100,6 +92,7 @@ export default function PaymentsPage() {
   const [childModal, setChildModal] = useState(null);
   const [commentModal, setCommentModal] = useState(null);
   const [commentText, setCommentText] = useState('');
+  const [commentPromisedDate, setCommentPromisedDate] = useState('');
   const [history, setHistory] = useState([]);
   const [cities, setCities] = useState([]);
   const [courses, setCourses] = useState([]);
@@ -110,20 +103,16 @@ export default function PaymentsPage() {
     groupId: '',
     parentQuery: ''
   });
-  const [payAmount, setPayAmount] = useState('');
-  const [paymentMethod, setPaymentMethod] = useState('Каспи');
-  const [payComment, setPayComment] = useState('');
-  const [payDate, setPayDate] = useState(todayIso());
-  const [waStatus, setWaStatus] = useState({ connected: false, connecting: false, error: '' });
-  const [waTemplate, setWaTemplate] = useState('{greeting}! Подошло время оплаты для {childName}. Могу выставить удаленный счет для оплаты?');
-  const [waIntervalSec, setWaIntervalSec] = useState(35);
-  const [waJitterSec, setWaJitterSec] = useState(10);
-  const [waSelected, setWaSelected] = useState({});
-  const [waSending, setWaSending] = useState(false);
-  const [waProgress, setWaProgress] = useState({ total: 0, sent: 0, failed: 0, current: '' });
-  const [waLog, setWaLog] = useState([]);
+  const [quickInfo, setQuickInfo] = useState('');
+  const [promisedDateModal, setPromisedDateModal] = useState(null);
+  const [promisedDateValue, setPromisedDateValue] = useState('');
+  const payAmountRef = useRef(null);
+  const payDateRef = useRef(null);
+  const payMethodRef = useRef(null);
 
   const selectedMonth = useMemo(() => monthIso(monthOffset), [monthOffset]);
+  const today = useMemo(() => todayIso(), []);
+  const todayMonth = useMemo(() => today.slice(0, 7), [today]);
 
   async function loadMeta() {
     const [cityList, courseList] = await Promise.all([api.listCities(), api.listCourses()]);
@@ -165,25 +154,6 @@ export default function PaymentsPage() {
     loadGroups();
   }, [filters.courseId]);
 
-  useEffect(() => {
-    async function loadWaStatus() {
-      try {
-        const { data } = await fetchBackendJson('/api/whatsapp/status');
-        setWaStatus({
-          connected: !!data?.connected,
-          connecting: !!data?.connecting,
-          error: data?.error || ''
-        });
-      } catch (e) {
-        setWaStatus({ connected: false, connecting: false, error: e?.message || 'Не удалось получить статус WhatsApp' });
-      }
-    }
-
-    loadWaStatus();
-    const timer = window.setInterval(loadWaStatus, 4000);
-    return () => window.clearInterval(timer);
-  }, []);
-
   const filteredCourses = useMemo(
     () => courses.filter((c) => !filters.cityId || Number(c.cityId) === Number(filters.cityId)),
     [courses, filters.cityId]
@@ -193,53 +163,61 @@ export default function PaymentsPage() {
     () => items.filter((x) => (x.billingMonth || todayIso().slice(0, 7)) === selectedMonth),
     [items, selectedMonth]
   );
-  const overdueTargets = useMemo(
-    () => monthItems
-      .filter((x) => x.paymentState === 'unpaid' && normalizePhone(x.parentPhone))
-      .map((x) => ({
-        id: String(x.childId),
-        childId: x.childId,
-        childFullName: x.childFullName,
-        parentFullName: x.parentFullName || '—',
-        parentPhone: normalizePhone(x.parentPhone),
-        reason: x.reason || ''
-      })),
-    [monthItems]
+  const allUnpaidItems = useMemo(
+    () => items.filter((x) => x.paymentState === 'unpaid'),
+    [items]
   );
-  const selectedTargets = useMemo(
-    () => overdueTargets.filter((x) => waSelected[x.id]),
-    [overdueTargets, waSelected]
-  );
-  const previewMessage = useMemo(
-    () => renderTemplate(waTemplate, selectedTargets[0]?.childFullName || 'Имя ребенка'),
-    [waTemplate, selectedTargets]
-  );
-
-  useEffect(() => {
-    setWaSelected((prev) => {
-      const next = {};
-      overdueTargets.forEach((item) => {
-        next[item.id] = prev[item.id] ?? true;
-      });
-      return next;
-    });
-  }, [overdueTargets]);
-
-  const unpaidBlocks = useMemo(() => groupByMonthAndParent(monthItems.filter((x) => x.paymentState === 'unpaid')), [monthItems]);
+  const unpaidBlocks = useMemo(() => groupByMonthAndParent(allUnpaidItems), [allUnpaidItems]);
   const paidBlocks = useMemo(() => groupByMonthAndParent(paidTransactions), [paidTransactions]);
-
+  const todayDueItems = useMemo(
+    () => allUnpaidItems.filter((x) => {
+      const key = normalizeDateKey(x.promisedDate);
+      if (key) return key === today;
+      const billMonth = normalizeMonthKey(x.billingMonth);
+      return !billMonth || billMonth >= todayMonth;
+    }),
+    [allUnpaidItems, today, todayMonth]
+  );
+  const overdueDueItems = useMemo(
+    () => allUnpaidItems.filter((x) => {
+      const key = normalizeDateKey(x.promisedDate);
+      if (key) return key < today;
+      const billMonth = normalizeMonthKey(x.billingMonth);
+      return !!billMonth && billMonth < todayMonth;
+    }),
+    [allUnpaidItems, today, todayMonth]
+  );
+  const promisedItems = useMemo(
+    () => allUnpaidItems.filter((x) => {
+      const key = normalizeDateKey(x.promisedDate);
+      return !!key && key > today;
+    }),
+    [allUnpaidItems, today]
+  );
   function openComment(child) {
     setCommentModal(child);
     setCommentText(child.paymentComment || '');
+    setCommentPromisedDate(child.promisedDate || '');
   }
 
   async function openChild(child) {
     const live = items.find((x) => Number(x.childId) === Number(child.childId));
-    setChildModal({ ...(live || {}), ...child, lessonsCount: live?.lessonsCount ?? child.lessonsCount ?? 0 });
-    setPayAmount('');
-    setPaymentMethod('Каспи');
-    setPayComment('');
-    setPayDate(todayIso());
+    let fullChild = null;
+    if (!live) {
+      try {
+        fullChild = await api.getChild(child.childId);
+      } catch {
+        fullChild = null;
+      }
+    }
+    setChildModal({
+      ...(live || {}),
+      ...child,
+      lessonsCount: live?.lessonsCount ?? fullChild?.profile?.lessonsCount ?? child.lessonsCount ?? 0,
+      attendedTotal: live?.attendedTotal ?? child.attendedTotal ?? 0,
+      cycleLength: live?.cycleLength ?? fullChild?.profile?.cycleLength ?? child.cycleLength ?? fullChild?._meta?.cycleLength ?? 8,
+      lastPaymentDate: fullChild?.profile?.lastPaymentDate || child.lastPaymentDate || live?.lastPaymentDate || null
+    });
     setHistory(await api.getPaymentHistory(child.childId));
   }
 
@@ -363,6 +341,7 @@ export default function PaymentsPage() {
                       {mode === 'unpaid' && (
                         <div className="payment-reason-badge">
                           <div>{child.reason}</div>
+                          <div className="payment-reason-comment">Цикл: {formatCycleProgress(child.lessonsCount, child.cycleLength)}</div>
                           {child.paymentComment && <div className="payment-reason-comment">{child.paymentComment}</div>}
                         </div>
                       )}
@@ -379,71 +358,79 @@ export default function PaymentsPage() {
     );
   }
 
-  async function sendBulkWhatsApp() {
-    if (waSending) return;
-    if (!waStatus.connected) {
-      setError('Сначала подключите WhatsApp в разделе WhatsApp.');
-      return;
-    }
-    if (!selectedTargets.length) {
-      setError('Выберите хотя бы одного получателя для рассылки.');
-      return;
-    }
+  async function quickMarkPaid(child) {
+    await openChild(child);
+  }
 
+  async function quickSetPromisedDate(child) {
+    const suggested = child.promisedDate || addDaysIso(todayIso(), 1);
+    setPromisedDateModal(child);
+    setPromisedDateValue(suggested);
+  }
+
+  async function savePromisedDateFromModal() {
+    if (!promisedDateModal) return;
+    if (!promisedDateValue) {
+      setError('Выберите дату обещанной оплаты.');
+      return;
+    }
     setError('');
-    setWaLog([]);
-    setWaSending(true);
-    setWaProgress({ total: selectedTargets.length, sent: 0, failed: 0, current: '' });
-
-    let sent = 0;
-    let failed = 0;
-
-    for (let index = 0; index < selectedTargets.length; index += 1) {
-      const target = selectedTargets[index];
-      const text = renderTemplate(waTemplate, target.childFullName);
-      setWaProgress((prev) => ({ ...prev, current: `${target.childFullName} (${target.parentPhone})` }));
-
-      try {
-        const { ok, data } = await fetchBackendJson('/api/whatsapp/send', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            phone: target.parentPhone,
-            text
-          })
-        });
-
-        if (!ok || !data?.success) {
-          failed += 1;
-          setWaLog((prev) => [...prev, `Ошибка: ${target.childFullName} (${target.parentPhone}) — ${data?.error || 'Ошибка отправки'}`]);
-        } else {
-          sent += 1;
-          setWaLog((prev) => [...prev, `Отправлено: ${target.childFullName} (${target.parentPhone})`]);
-        }
-      } catch (e) {
-        failed += 1;
-        setWaLog((prev) => [...prev, `Ошибка: ${target.childFullName} (${target.parentPhone}) — ${e?.message || 'Failed to fetch'}`]);
-      }
-
-      setWaProgress((prev) => ({ ...prev, sent, failed }));
-
-      if (index < selectedTargets.length - 1) {
-        const safeInterval = Math.max(15, Number(waIntervalSec || 0));
-        const jitter = Math.max(0, Number(waJitterSec || 0));
-        const delayMs = (safeInterval + (jitter ? Math.floor(Math.random() * (jitter + 1)) : 0)) * 1000;
-        await sleep(delayMs);
-      }
+    setQuickInfo('');
+    try {
+      await api.savePaymentComment({
+        childId: promisedDateModal.childId,
+        comment: promisedDateModal.paymentComment || 'Обещали оплатить',
+        promisedDate: promisedDateValue
+      });
+      setQuickInfo(`Дата оплаты обновлена: ${promisedDateModal.childFullName} → ${promisedDateValue}`);
+      setPromisedDateModal(null);
+      setPromisedDateValue('');
+      await load();
+    } catch (e) {
+      setError(e?.message || 'Не удалось перенести дату оплаты.');
     }
+  }
 
-    setWaProgress((prev) => ({ ...prev, current: '' }));
-    setWaSending(false);
+  function QuickActionsBlock({ title, rows, tone = '' }) {
+    return (
+      <div className={`panel payment-quick-card ${tone}`}>
+        <div className="payment-quick-head">
+          <b>{title}</b>
+          <span>{rows.length}</span>
+        </div>
+        <div className="payment-quick-list">
+          {rows.slice(0, 12).map((child) => (
+            <div className="payment-quick-row" key={`${title}-${child.childId}`}>
+              <div>
+                <div>{child.childFullName}</div>
+                <div style={{ color: '#97a7c3', fontSize: 12 }}>
+                  {child.parentFullName || '—'} • {child.parentPhone || '—'}
+                </div>
+                <div style={{ color: '#97a7c3', fontSize: 12 }}>
+                  {child.courseName || '—'} / {child.groupName || 'без группы'}
+                </div>
+                {!!child.promisedDate && (
+                  <div style={{ color: '#8ec5ff', fontSize: 12 }}>Обещали: {child.promisedDate}</div>
+                )}
+              </div>
+              <div className="row-actions" style={{ gap: 6, flexWrap: 'wrap' }}>
+                <button type="button" onClick={() => quickSetPromisedDate(child)}>Перенести</button>
+                <button type="button" className="primary" onClick={() => quickMarkPaid(child)}>Оплачено</button>
+              </div>
+            </div>
+          ))}
+          {!rows.length && <div style={{ color: '#97a7c3' }}>Нет записей</div>}
+        </div>
+      </div>
+    );
   }
 
   return (
     <section>
       <h1 className="page-title">Оплаты</h1>
-      <p className="page-subtitle">Первая оплата после 1-го занятия, затем каждая следующая оплата после 8 занятий цикла.</p>
+      <p className="page-subtitle">Оплаты 2.0: быстрые действия по долгам, обещанным оплатам и напоминаниям.</p>
       {error && <p style={{ color: '#ff6978' }}>{error}</p>}
+      {!!quickInfo && <p style={{ color: '#73e7d5' }}>{quickInfo}</p>}
 
       <div className="toolbar payment-toolbar">
         <select value={filters.cityId} onChange={(e) => setFilters((v) => ({ ...v, cityId: e.target.value, courseId: '', groupId: '' }))}>
@@ -473,6 +460,12 @@ export default function PaymentsPage() {
         <button onClick={exportMonthlyPdf}>Отчет PDF</button>
       </div>
 
+      <div className="payment-quick-grid">
+        <QuickActionsBlock title="Сегодня к оплате" rows={todayDueItems} tone="today" />
+        <QuickActionsBlock title="Просрочено" rows={overdueDueItems} tone="overdue" />
+        <QuickActionsBlock title="Обещали оплатить" rows={promisedItems} tone="promised" />
+      </div>
+
       <div className="payment-grid">
         <PaymentBlock title="К оплате" blocks={unpaidBlocks} mode="unpaid" />
         <PaymentBlock title="Оплаченные (история)" blocks={paidBlocks} mode="paid" />
@@ -485,32 +478,44 @@ export default function PaymentsPage() {
             <div><b>Телефон:</b><div>{childModal.parentPhone || '—'}</div></div>
             <div><b>Кружок:</b><div>{childModal.courseName}</div></div>
             <div><b>Группа:</b><div>{childModal.groupName || '—'}</div></div>
-            <div><b>Посещений после оплаты:</b><div>{childModal.lessonsCount}</div></div>
-            <div><b>Текущий цикл:</b><div>{childModal.lessonsCount}/8</div></div>
+            <div><b>Занятий в текущем цикле:</b><div>{childModal.lessonsCount}</div></div>
+            <div><b>Текущий цикл:</b><div>{formatCycleProgress(childModal.lessonsCount, childModal.cycleLength)}</div></div>
+            <div><b>Всего посещений:</b><div>{childModal.attendedTotal || 0}</div></div>
             <div><b>Последняя оплата:</b><div>{childModal.txPaidDate || childModal.lastPaymentDate || '—'}</div></div>
-            <div className="full"><b>Комментарий по долгу:</b><div>{childModal.paymentComment || '—'}</div></div>
           </div>
 
           {childModal.paymentState === 'unpaid' && (
             <div className="form-grid" style={{ marginTop: 12 }}>
               <label>
                 <div style={{ marginBottom: 6, color: '#97a7c3' }}>Сумма оплаты (тг)</div>
-                <input type="number" min="0" value={payAmount} onChange={(e) => setPayAmount(e.target.value)} placeholder="Например 30000" />
+                <input
+                  key={`pay-amount-${childModal.childId}`}
+                  ref={payAmountRef}
+                  type="number"
+                  min="0"
+                  defaultValue={String(Number(childModal?.txAmount || 0) || '')}
+                  placeholder="Например 30000"
+                />
               </label>
               <label>
                 <div style={{ marginBottom: 6, color: '#97a7c3' }}>Дата оплаты</div>
-                <input type="date" value={payDate} onChange={(e) => setPayDate(e.target.value)} />
+                <input
+                  key={`pay-date-${childModal.childId}`}
+                  ref={payDateRef}
+                  type="date"
+                  defaultValue={todayIso()}
+                />
               </label>
               <label>
                 <div style={{ marginBottom: 6, color: '#97a7c3' }}>Способ оплаты</div>
-                <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}>
+                <select key={`pay-method-${childModal.childId}`} ref={payMethodRef} defaultValue="Каспи">
                   <option value="Каспи">Каспи</option>
                   <option value="Наличные">Наличные</option>
                 </select>
               </label>
               <label className="full">
-                <div style={{ marginBottom: 6, color: '#97a7c3' }}>Комментарий к оплате</div>
-                <textarea rows={3} value={payComment} onChange={(e) => setPayComment(e.target.value)} placeholder="Наличные/перевод, детали оплаты" />
+                <div style={{ marginBottom: 6, color: '#97a7c3' }}>Сумма обязательна</div>
+                <div style={{ color: '#97a7c3' }}>Для сохранения оплаты укажите сумму, дату и способ оплаты.</div>
               </label>
             </div>
           )}
@@ -524,7 +529,7 @@ export default function PaymentsPage() {
                     <th>Дата</th>
                     <th>Сумма</th>
                     <th>Способ</th>
-                    <th>Цикл (уроков)</th>
+                    <th>Посещений на момент оплаты</th>
                     <th>Комментарий</th>
                     <th></th>
                   </tr>
@@ -535,7 +540,7 @@ export default function PaymentsPage() {
                       <td>{row.paidDate}</td>
                       <td>{Number(row.amount || 0).toLocaleString('ru-RU')}</td>
                       <td>{row.paymentMethod || '—'}</td>
-                      <td>{cycleTo8(row.cycleLessons)}</td>
+                      <td>{Number(row.cycleLessons || 0)}</td>
                       <td>{row.comment || '—'}</td>
                       <td>
                         <button
@@ -576,17 +581,22 @@ export default function PaymentsPage() {
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
             {childModal.paymentState === 'unpaid' && (
               <>
-                <button onClick={() => openComment(childModal)}>Комментарий</button>
                 <button
                   className="primary"
                   onClick={async () => {
+                    const amount = Number(payAmountRef.current?.value || 0);
+                    const payDate = String(payDateRef.current?.value || '').trim();
+                    const paymentMethod = String(payMethodRef.current?.value || '').trim();
+                    if (!payDate || !paymentMethod || !Number.isFinite(amount) || amount <= 0) {
+                      setError('Заполните сумму, дату и способ оплаты.');
+                      return;
+                    }
                     try {
                       await api.markPaymentPaid({
                         childId: childModal.childId,
                         paidDate: payDate || todayIso(),
-                        amount: Number(payAmount || 0),
-                        paymentMethod,
-                        comment: payComment || 'Оплата отмечена вручную'
+                        amount,
+                        paymentMethod
                       });
                       setChildModal(null);
                       await load();
@@ -612,7 +622,7 @@ export default function PaymentsPage() {
                 await api.savePaymentComment({
                   childId: commentModal.childId,
                   comment: commentText,
-                  promisedDate: null
+                  promisedDate: commentPromisedDate || null
                 });
                 setCommentModal(null);
                 await load();
@@ -626,12 +636,35 @@ export default function PaymentsPage() {
                 <div style={{ marginBottom: 6, color: '#97a7c3' }}>Комментарий</div>
                 <textarea value={commentText} onChange={(e) => setCommentText(e.target.value)} rows={4} required style={{ width: '100%' }} />
               </label>
+              <label>
+                <div style={{ marginBottom: 6, color: '#97a7c3' }}>Обещанная дата оплаты</div>
+                <input type="date" value={commentPromisedDate} onChange={(e) => setCommentPromisedDate(e.target.value)} />
+              </label>
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
               <button type="button" onClick={() => setCommentModal(null)}>Отмена</button>
               <button className="primary" type="submit">Сохранить</button>
             </div>
           </form>
+        </Modal>
+      )}
+
+      {promisedDateModal && (
+        <Modal title={`Перенести оплату: ${promisedDateModal.childFullName}`} onClose={() => setPromisedDateModal(null)}>
+          <div className="form-grid">
+            <label>
+              <div style={{ marginBottom: 6, color: '#97a7c3' }}>Новая дата</div>
+              <input
+                type="date"
+                value={promisedDateValue}
+                onChange={(e) => setPromisedDateValue(e.target.value)}
+              />
+            </label>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+            <button type="button" onClick={() => setPromisedDateModal(null)}>Отмена</button>
+            <button type="button" className="primary" onClick={savePromisedDateFromModal}>Сохранить</button>
+          </div>
         </Modal>
       )}
     </section>

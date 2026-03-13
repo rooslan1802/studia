@@ -11,28 +11,47 @@ const paidReportFields = [
   { key: 'cityName', label: 'Город' },
   { key: 'studioName', label: 'Студия' },
   { key: 'childName', label: 'ФИО ребенка' },
+  { key: 'childIIN', label: 'ИИН ребенка' },
+  { key: 'childBirthDate', label: 'Дата рождения' },
   { key: 'childAge', label: 'Возраст' },
   { key: 'courseName', label: 'Кружок' },
   { key: 'groupName', label: 'Группа' },
+  { key: 'parentName', label: 'ФИО родителя' },
   { key: 'lastPaymentDate', label: 'Дата последней оплаты' },
-  { key: 'parentPhone', label: 'Номер телефона' }
+  { key: 'paymentStartDate', label: 'Старт оплаты' },
+  { key: 'lessonsCount', label: 'Уроков после оплаты' },
+  { key: 'parentPhone', label: 'Номер телефона' },
+  { key: 'messageTag', label: 'Пометка' }
 ];
 
 const voucherReportFields = [
   { key: 'cityName', label: 'Город' },
   { key: 'studioName', label: 'Студия' },
   { key: 'childName', label: 'ФИО ребенка' },
+  { key: 'childIIN', label: 'ИИН ребенка' },
+  { key: 'childBirthDate', label: 'Дата рождения' },
   { key: 'childAge', label: 'Возраст' },
   { key: 'courseName', label: 'Кружок' },
   { key: 'groupName', label: 'Группа' },
-  { key: 'parentPhone', label: 'Номер телефона' }
+  { key: 'parentName', label: 'ФИО родителя' },
+  { key: 'parentIIN', label: 'ИИН родителя' },
+  { key: 'parentEmail', label: 'Email родителя' },
+  { key: 'voucherNumber', label: 'Номер ваучера' },
+  { key: 'enrollmentDate', label: 'Дата зачисления' },
+  { key: 'voucherEndDate', label: 'Дата окончания ваучера' },
+  { key: 'importSource', label: 'Источник импорта' },
+  { key: 'parentPhone', label: 'Номер телефона' },
+  { key: 'messageTag', label: 'Пометка' }
 ];
 
 const queueReportFields = [
   { key: 'cityName', label: 'Город' },
   { key: 'studioName', label: 'Студия' },
   { key: 'childFullName', label: 'ФИО ребенка' },
+  { key: 'childIIN', label: 'ИИН ребенка' },
   { key: 'childAge', label: 'Возраст' },
+  { key: 'parentFullName', label: 'ФИО родителя' },
+  { key: 'parentIIN', label: 'ИИН родителя' },
   { key: 'phone', label: 'Номер телефона' },
   { key: 'queueCategory', label: 'Категория очереди' },
   { key: 'queueDate', label: 'Дата очереди' },
@@ -45,11 +64,47 @@ function getReportFieldsByList(type) {
   return paidReportFields;
 }
 
+function getReportValue(row, key) {
+  if (key === 'queueNumber') return formatQueueNumber(row.queueNumber);
+  if (key === 'messageTag') return messageTagLabel(row.messageTag);
+  return row[key] ?? '';
+}
+
 function formatQueueNumber(queueNumber) {
   const normalized = String(queueNumber ?? '').trim();
   if (!normalized) return '—';
   if (normalized.toUpperCase() === 'ВАУЧЕР') return 'ВАУЧЕР';
   return normalized;
+}
+
+function renderQueueShiftBadge(queueShift) {
+  if (queueShift === null || queueShift === undefined) return '—';
+  const numeric = Number(queueShift);
+  const label = numeric === 0 ? '0' : `${numeric > 0 ? '+' : ''}${numeric}`;
+  const style = {
+    display: 'inline-flex',
+    minWidth: 52,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: '6px 10px',
+    borderRadius: 999,
+    fontWeight: 700,
+    border: '1px solid rgba(111, 135, 170, 0.35)',
+    color: '#d7e6ff'
+  };
+  if (numeric < 0) {
+    style.color = '#73e7a5';
+    style.background = 'rgba(31, 95, 56, 0.28)';
+    style.border = '1px solid rgba(115, 231, 165, 0.35)';
+  } else if (numeric > 0) {
+    style.color = '#ff8e8e';
+    style.background = 'rgba(120, 35, 35, 0.24)';
+    style.border = '1px solid rgba(255, 142, 142, 0.35)';
+  } else {
+    style.color = '#9eb4d4';
+    style.background = 'rgba(64, 84, 112, 0.22)';
+  }
+  return <span style={style}>{label}</span>;
 }
 
 function parseBirthDateFromIIN(iinRaw) {
@@ -78,6 +133,36 @@ function ageFromBirthDate(isoDate) {
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function addDays(baseIso, days) {
+  const d = new Date(`${baseIso}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return baseIso;
+  d.setDate(d.getDate() + Number(days || 0));
+  return d.toISOString().slice(0, 10);
+}
+
+function formatQueueUpdatedAt(value) {
+  if (!value) return '—';
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return String(value);
+  return dt.toLocaleString('ru-RU', {
+    timeZone: 'Asia/Almaty',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+function getQueueRowShiftStyle(queueShift) {
+  const numeric = Number(queueShift);
+  if (!Number.isFinite(numeric) || numeric === 0) return undefined;
+  if (numeric < 0) {
+    return { background: 'rgba(27, 74, 47, 0.18)' };
+  }
+  return { background: 'rgba(92, 31, 31, 0.16)' };
 }
 
 function normalizeText(value) {
@@ -128,9 +213,23 @@ function compareValues(a, b, direction = 'asc') {
 }
 
 function messageTagLabel(tag) {
-  if (tag === 'qr') return 'QR';
-  if (tag === 'reminder') return 'Напоминание';
+  const normalized = String(tag || '').trim().toLowerCase();
+  if (normalized === 'qr') return 'QR';
+  if (normalized === 'reminder') return 'Напоминание';
+  if (String(tag || '').trim()) return String(tag || '').trim();
   return '—';
+}
+
+function isTagEqual(value, expected) {
+  return String(value || '').trim().toLowerCase() === String(expected || '').trim().toLowerCase();
+}
+
+function getMessageTagPreset(tag) {
+  const normalized = String(tag || '').trim().toLowerCase();
+  if (!normalized) return '';
+  if (normalized === 'qr') return 'qr';
+  if (normalized === 'reminder' || normalized === 'напоминание') return 'reminder';
+  return 'custom';
 }
 
 function normalizeImportSource(source) {
@@ -160,10 +259,16 @@ function qosymshaChildKey(item, index) {
   ].join('|');
 }
 
+function resolveEntityName(list, id) {
+  const numericId = Number(id || 0);
+  if (!numericId) return '—';
+  return list.find((item) => Number(item.id) === numericId)?.name || '—';
+}
+
 export default function ChildrenPage() {
   const location = useLocation();
   const [children, setChildren] = useState([]);
-  const [childrenCounts, setChildrenCounts] = useState({ paid: 0, voucher: 0 });
+  const [childrenCounts, setChildrenCounts] = useState({ paid: 0, voucher: 0, archived: 0 });
   const [queueChildren, setQueueChildren] = useState([]);
   const [cities, setCities] = useState([]);
   const [studios, setStudios] = useState([]);
@@ -173,7 +278,11 @@ export default function ChildrenPage() {
   const [selectedChild, setSelectedChild] = useState(null);
   const [selectedChildTagDraft, setSelectedChildTagDraft] = useState('');
   const [selectedChildTagSaving, setSelectedChildTagSaving] = useState(false);
+  const [transferModalData, setTransferModalData] = useState(null);
+  const [transferGroupsOptions, setTransferGroupsOptions] = useState([]);
+  const [transferSaving, setTransferSaving] = useState(false);
   const [selectedQueueChild, setSelectedQueueChild] = useState(null);
+  const [selectedArchivedEntity, setSelectedArchivedEntity] = useState(null);
   const [queueModalData, setQueueModalData] = useState(null);
 
   const [cityFilter, setCityFilter] = useState('');
@@ -183,11 +292,13 @@ export default function ChildrenPage() {
   const [activeList, setActiveList] = useState(() => {
     const params = new URLSearchParams(location.search);
     const type = params.get('type');
-    return type === 'voucher' || type === 'paid' ? type : 'paid';
+    return type === 'voucher' || type === 'paid' || type === 'archived' ? type : 'paid';
   });
+  const [archivedCategory, setArchivedCategory] = useState('paid');
 
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
+  const [archivedEntities, setArchivedEntities] = useState([]);
 
   const [reportOpen, setReportOpen] = useState(false);
   const [reportSelected, setReportSelected] = useState(getReportFieldsByList(activeList).map((x) => x.key));
@@ -225,7 +336,7 @@ export default function ChildrenPage() {
   const [artsportSelectedChildren, setArtsportSelectedChildren] = useState({});
   const [artsportImportResult, setArtsportImportResult] = useState(null);
   const [bulkEditOpen, setBulkEditOpen] = useState(false);
-  const [bulkEditData, setBulkEditData] = useState({ cityId: '', studioId: '', courseId: '', messageTag: '', voucherNumber: '' });
+  const [bulkEditData, setBulkEditData] = useState({ cityId: '', studioId: '', courseId: '', messageTag: '', messageTagMode: '', voucherNumber: '' });
   const importInputRef = useRef(null);
 
   useEffect(() => {
@@ -278,7 +389,7 @@ export default function ChildrenPage() {
   }
 
   async function loadChildren() {
-    if (activeList === 'queue') return;
+    if (activeList === 'queue' || activeList === 'archived') return;
     const list = await api.listChildren({
       cityId: cityFilter ? Number(cityFilter) : undefined,
       studioId: studioFilter ? Number(studioFilter) : undefined,
@@ -290,14 +401,15 @@ export default function ChildrenPage() {
   }
 
   async function loadChildrenCounts() {
-    const list = await api.listChildren({
+    const [list, archived] = await Promise.all([api.listChildren({
       cityId: cityFilter ? Number(cityFilter) : undefined,
       studioId: studioFilter ? Number(studioFilter) : undefined,
       courseId: courseFilter ? Number(courseFilter) : undefined
-    });
+    }), api.listArchivedEntities({})]);
     setChildrenCounts({
       paid: list.filter((x) => x.type === 'paid').length,
-      voucher: list.filter((x) => x.type === 'voucher').length
+      voucher: list.filter((x) => x.type === 'voucher').length,
+      archived: Array.isArray(archived) ? archived.length : 0
     });
   }
 
@@ -313,9 +425,15 @@ export default function ChildrenPage() {
     }
   }
 
+  async function loadArchivedEntities() {
+    const list = await api.listArchivedEntities({});
+    setArchivedEntities(Array.isArray(list) ? list : []);
+  }
+
   async function loadAll() {
     await loadMeta();
     await loadChildren();
+    await loadArchivedEntities();
   }
 
   async function openEdit(childId) {
@@ -327,6 +445,51 @@ export default function ChildrenPage() {
     const full = await api.getChild(row.id);
     if (full) {
       setSelectedChild({ ...full, _meta: row });
+    }
+  }
+
+  function openTransferModal(child) {
+    if (!child || child.type !== 'paid') return;
+    setTransferModalData({
+      childId: child.id,
+      studioId: String(child.studioId || ''),
+      courseId: String(child.courseId || ''),
+      groupId: String(child.groupId || ''),
+      effectiveDate: addDays(todayIso(), 1)
+    });
+  }
+
+  async function submitTransferChild() {
+    if (!selectedChild || !transferModalData) return;
+    if (!transferModalData.studioId || !transferModalData.courseId || !transferModalData.groupId || !transferModalData.effectiveDate) {
+      setError('Заполните студию, кружок, группу и дату перевода.');
+      return;
+    }
+    setTransferSaving(true);
+    try {
+      await api.saveChild({
+        id: selectedChild.id,
+        studioId: Number(transferModalData.studioId),
+        courseId: Number(transferModalData.courseId),
+        groupId: Number(transferModalData.groupId),
+        transferEffectiveDate: transferModalData.effectiveDate,
+        type: selectedChild.type,
+        messageTag: selectedChild.messageTag || '',
+        profile: selectedChild.profile
+      });
+      const refreshed = await api.getChild(selectedChild.id);
+      if (refreshed) {
+        const rowMeta = children.find((row) => Number(row.id) === Number(selectedChild.id)) || selectedChild._meta || {};
+        setSelectedChild({ ...refreshed, _meta: { ...rowMeta, cityName: refreshed.cityName, studioName: refreshed.studioName, courseName: refreshed.courseName, groupName: refreshed.groupName } });
+      }
+      setTransferModalData(null);
+      await loadChildren();
+      await loadChildrenCounts();
+      setError('');
+    } catch (e) {
+      setError(e?.message || 'Не удалось перевести ребенка.');
+    } finally {
+      setTransferSaving(false);
     }
   }
 
@@ -365,7 +528,7 @@ export default function ChildrenPage() {
     const params = new URLSearchParams(location.search);
     const type = params.get('type');
     const q = params.get('q');
-    if (type === 'voucher' || type === 'paid') setActiveList(type);
+    if (type === 'voucher' || type === 'paid' || type === 'archived') setActiveList(type);
     if (q !== null) setSearch(q);
   }, [location.search]);
 
@@ -382,9 +545,22 @@ export default function ChildrenPage() {
   }, [activeList]);
 
   useEffect(() => {
+    async function loadTransferGroups() {
+      if (!transferModalData?.courseId) {
+        setTransferGroupsOptions([]);
+        return;
+      }
+      const list = await api.listGroups(Number(transferModalData.courseId));
+      setTransferGroupsOptions(Array.isArray(list) ? list : []);
+    }
+    loadTransferGroups();
+  }, [transferModalData?.courseId]);
+
+  useEffect(() => {
     loadChildren();
     loadChildrenCounts();
     loadQueueChildren();
+    loadArchivedEntities();
   }, [cityFilter, studioFilter, courseFilter, messageTagFilter, activeList]);
 
   useEffect(() => {
@@ -404,9 +580,14 @@ export default function ChildrenPage() {
     if (!studioFilter) return courses;
     return courses.filter((course) => Number(course.studioId) === Number(studioFilter));
   }, [courses, studioFilter]);
+  const transferStudios = useMemo(() => studios, [studios]);
+  const paidTransferCourses = useMemo(
+    () => courses.filter((course) => Number(course.studioId) === Number(transferModalData?.studioId || 0)),
+    [courses, transferModalData?.studioId]
+  );
 
   const filteredRows = useMemo(() => {
-    if (activeList === 'queue') return [];
+    if (activeList === 'queue' || activeList === 'archived') return [];
     if (!search.trim()) return children;
     const q = search.toLowerCase();
     return children.filter((x) =>
@@ -440,6 +621,23 @@ export default function ChildrenPage() {
     );
   }, [queueChildren, search, activeList]);
 
+  const filteredArchivedRows = useMemo(() => {
+    if (activeList !== 'archived') return [];
+    const q = search.trim().toLowerCase();
+    return archivedEntities
+      .filter((row) => row.entityCategory === archivedCategory)
+      .filter((row) => {
+        if (!q) return true;
+        return [
+          row.entityName,
+          row.snapshot?.childIIN,
+          row.snapshot?.parentPhone,
+          row.snapshot?.queueNumber,
+          row.snapshot?.voucherNumber
+        ].filter(Boolean).some((value) => String(value).toLowerCase().includes(q));
+      });
+  }, [activeList, archivedEntities, archivedCategory, search]);
+
   const sortedRows = useMemo(() => {
     const rows = [...filteredRows];
     rows.sort((a, b) => compareValues(a[childrenSort.key], b[childrenSort.key], childrenSort.direction));
@@ -459,7 +657,11 @@ export default function ChildrenPage() {
     return rows;
   }, [filteredQueueRows, queueSort]);
 
-  const selectableRows = useMemo(() => (activeList === 'queue' ? sortedQueueRows : sortedRows), [activeList, sortedRows, sortedQueueRows]);
+  const selectableRows = useMemo(() => {
+    if (activeList === 'queue') return sortedQueueRows;
+    if (activeList === 'archived') return filteredArchivedRows;
+    return sortedRows;
+  }, [activeList, sortedRows, sortedQueueRows, filteredArchivedRows]);
   const selectedRows = useMemo(() => selectableRows.filter((row) => selectedIds[row.id]), [selectableRows, selectedIds]);
 
   function toggleChildrenSort(key) {
@@ -492,6 +694,8 @@ export default function ChildrenPage() {
   function clearVisibleSelection() {
     setSelectedIds(Object.fromEntries(selectableRows.map((row) => [row.id, false])));
   }
+
+  const allVisibleSelected = selectableRows.length > 0 && selectableRows.every((row) => !!selectedIds[row.id]);
 
   async function applyVoucherTag(tag) {
     const ids = selectedRows.map((row) => row.id);
@@ -552,11 +756,14 @@ export default function ChildrenPage() {
   async function deleteSelectedRows() {
     if (!selectedRows.length) return;
     const isQueue = activeList === 'queue';
-    const label = isQueue ? 'записей очереди' : 'детей';
+    const isArchived = activeList === 'archived';
+    const label = isArchived ? 'архивных записей' : (isQueue ? 'записей очереди' : 'детей');
     if (!window.confirm(`Удалить выбранных ${selectedRows.length} ${label}?`)) return;
 
     try {
-      if (isQueue) {
+      if (isArchived) {
+        await Promise.all(selectedRows.map((row) => api.deleteArchivedEntity({ id: row.id })));
+      } else if (isQueue) {
         await Promise.all(selectedRows.map((row) => api.deleteQueueChild(row.id)));
       } else {
         await Promise.all(selectedRows.map((row) => api.deleteChild(row.id)));
@@ -567,6 +774,7 @@ export default function ChildrenPage() {
       setSelectedQueueChild(null);
       await loadChildren();
       await loadQueueChildren();
+      await loadArchivedEntities();
       await loadChildrenCounts();
       setError('');
     } catch (e) {
@@ -660,6 +868,8 @@ export default function ChildrenPage() {
         `Добавлено: ${result.added || 0}\n` +
         `Обновлено: ${result.updated || 0}\n` +
         `Пропущено: ${result.skipped || 0}\n` +
+        `Новых детей: ${(result.newChildren || []).length}\n` +
+        `${result.newChildren?.length ? `\nНайденные новые дети:\n${result.newChildren.join('\n')}\n` : ''}` +
         `Технический кружок: ${result.courseName || '—'}`
       );
     } catch (e) {
@@ -807,6 +1017,7 @@ export default function ChildrenPage() {
         added: Number(result.added || 0),
         updated: Number(result.updated || 0),
         skipped: Number(result.skipped || 0),
+        newChildren: Array.isArray(result.newChildren) ? result.newChildren.slice(0, 50) : [],
         errors: Array.isArray(result.errors) ? result.errors.slice(0, 10) : []
       });
     } catch (e) {
@@ -857,6 +1068,7 @@ export default function ChildrenPage() {
         added: Number(result.added || 0),
         updated: Number(result.updated || 0),
         skipped: Number(result.skipped || 0),
+        newChildren: Array.isArray(result.newChildren) ? result.newChildren.slice(0, 50) : [],
         errors: Array.isArray(result.errors) ? result.errors.slice(0, 10) : []
       });
     } catch (e) {
@@ -871,13 +1083,8 @@ export default function ChildrenPage() {
     const fields = getReportFieldsByList(activeList);
     const selected = fields.filter((f) => reportSelected.includes(f.key));
     const header = selected.map((f) => f.label);
-    const sourceRows = activeList === 'queue' ? sortedQueueRows : sortedRows;
-    const rows = sourceRows.map((row) =>
-      selected.map((f) => {
-        if (f.key === 'queueNumber') return formatQueueNumber(row.queueNumber);
-        return row[f.key] ?? '';
-      })
-    );
+    const sourceRows = activeList === 'queue' ? sortedQueueRows : activeList === 'archived' ? filteredArchivedRows : sortedRows;
+    const rows = sourceRows.map((row) => selected.map((f) => getReportValue(row, f.key)));
 
     if (format === 'xlsx') {
       import('xlsx').then((XLSX) => {
@@ -919,7 +1126,7 @@ export default function ChildrenPage() {
     () => groups.filter((g) => Number(g.courseId) === Number(queueToVoucherData?.courseId || 0)),
     [groups, queueToVoucherData?.courseId]
   );
-  const activeListLabel = activeList === 'queue' ? 'Очередь' : activeList === 'voucher' ? 'Ваучеры' : 'Платники';
+  const activeListLabel = activeList === 'queue' ? 'Очередь' : activeList === 'voucher' ? 'Ваучеры' : activeList === 'archived' ? 'Архив' : 'Платники';
 
   function openQueueTransfer(row) {
     const isVoucher = String(row.queueNumber || '').trim().toUpperCase() === 'ВАУЧЕР';
@@ -1209,11 +1416,14 @@ export default function ChildrenPage() {
           <button className={activeList === 'queue' ? 'tab-active' : ''} onClick={() => setActiveList('queue')}>
             Очередь ({queueChildren.length})
           </button>
+          <button className={activeList === 'archived' ? 'tab-active' : ''} onClick={() => setActiveList('archived')}>
+            Архивированные ({childrenCounts.archived || 0})
+          </button>
         </div>
 
         <div className="toolbar children-toolbar">
           <div className="children-toolbar-left">
-            {activeList !== 'queue' && <button className="primary" onClick={() => setModalData({})}>Добавить ребенка</button>}
+            {activeList !== 'queue' && activeList !== 'archived' && <button className="primary" onClick={() => setModalData({})}>Добавить ребенка</button>}
             {activeList === 'queue' && (
               <button
                 className="primary"
@@ -1232,17 +1442,31 @@ export default function ChildrenPage() {
               {filteredStudios.map((studio) => <option key={studio.id} value={studio.id}>{studio.name}</option>)}
             </select>
 
-            {activeList !== 'queue' && (
+            {activeList !== 'queue' && activeList !== 'archived' && (
               <select value={courseFilter} onChange={(e) => setCourseFilter(e.target.value)}>
                 <option value="">Все кружки</option>
                 {filteredCourses.map((course) => <option key={course.id} value={course.id}>{course.name}</option>)}
               </select>
             )}
             {activeList === 'voucher' && (
-              <select value={messageTagFilter} onChange={(e) => setMessageTagFilter(e.target.value)}>
-                <option value="">Все пометки</option>
-                <option value="qr">QR</option>
-                <option value="reminder">Напоминание</option>
+              <input
+                list="message-tag-filter-options"
+                value={messageTagFilter}
+                onChange={(e) => setMessageTagFilter(e.target.value)}
+                placeholder="Все пометки"
+              />
+            )}
+            {activeList === 'voucher' && (
+              <datalist id="message-tag-filter-options">
+                <option value="qr" />
+                <option value="напоминание" />
+              </datalist>
+            )}
+            {activeList === 'archived' && (
+              <select value={archivedCategory} onChange={(e) => setArchivedCategory(e.target.value)}>
+                <option value="paid">Платники</option>
+                <option value="voucher">Ваучеры</option>
+                <option value="queue">Очередь</option>
               </select>
             )}
             <button type="button" onClick={() => setSelectionMode((v) => !v)}>
@@ -1254,8 +1478,9 @@ export default function ChildrenPage() {
             <div className="children-selection-bar">
               <div className="children-selection-summary">Выбрано: {selectedRows.length}</div>
               <div className="children-selection-actions">
-                <button type="button" onClick={selectAllVisible}>Выбрать все</button>
-                <button type="button" onClick={clearVisibleSelection}>Снять все</button>
+                <button type="button" onClick={allVisibleSelected ? clearVisibleSelection : selectAllVisible}>
+                  {allVisibleSelected ? 'Снять выбор' : 'Выбрать все'}
+                </button>
                 <button type="button" className="danger" onClick={deleteSelectedRows} disabled={!selectedRows.length}>
                   Удалить
                 </button>
@@ -1279,10 +1504,24 @@ export default function ChildrenPage() {
                       <div className="children-actions-menu-list">
                         <button type="button" onClick={() => applyVoucherTag('qr')} disabled={!selectedRows.length}>Пометка: QR</button>
                         <button type="button" onClick={() => applyVoucherTag('reminder')} disabled={!selectedRows.length}>Пометка: Напоминание</button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const customTag = window.prompt('Введите свою пометку');
+                            if (customTag === null) return;
+                            applyVoucherTag(customTag);
+                          }}
+                          disabled={!selectedRows.length}
+                        >
+                          Своя пометка
+                        </button>
                         <button type="button" onClick={() => applyVoucherTag('')} disabled={!selectedRows.length}>Убрать пометку</button>
                         <button
                           type="button"
-                          onClick={() => setBulkEditOpen(true)}
+                          onClick={() => {
+                            setBulkEditData({ cityId: '', studioId: '', courseId: '', messageTag: '', messageTagMode: '', voucherNumber: '' });
+                            setBulkEditOpen(true);
+                          }}
                           disabled={!selectedRows.length}
                         >
                           Расширенное изменение
@@ -1331,8 +1570,8 @@ export default function ChildrenPage() {
                 {queueRefreshing ? 'Обновление...' : 'Обновить очередь'}
               </button>
             )}
-            <button onClick={() => { setImportResult(null); setImportSource('excel'); setImportOpen(true); }}>Импорт</button>
-            <button onClick={() => setReportOpen(true)}>Отчет</button>
+            {activeList !== 'archived' && <button onClick={() => { setImportResult(null); setImportSource('excel'); setImportOpen(true); }}>Импорт</button>}
+            {activeList !== 'archived' && <button onClick={() => setReportOpen(true)}>Экспорт</button>}
           </div>
         </div>
       </div>
@@ -1351,12 +1590,13 @@ export default function ChildrenPage() {
                 <th><button type="button" className="th-sort-btn" onClick={() => toggleQueueSort('queueCategory')}>Категория очереди {renderSortArrow(queueSort, 'queueCategory')}</button></th>
                 <th><button type="button" className="th-sort-btn" onClick={() => toggleQueueSort('queueDate')}>Дата очереди {renderSortArrow(queueSort, 'queueDate')}</button></th>
                 <th><button type="button" className="th-sort-btn" onClick={() => toggleQueueSort('queueNumber')}>Номер очереди {renderSortArrow(queueSort, 'queueNumber')}</button></th>
+                <th>Сдвиг</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
               {sortedQueueRows.map((row) => (
-                <tr key={row.id} className="child-row" onClick={() => setSelectedQueueChild(row)}>
+                <tr key={row.id} className="child-row" style={getQueueRowShiftStyle(row.queueShift)} onClick={() => setSelectedQueueChild(row)}>
                   {selectionMode && (
                     <td onClick={(e) => e.stopPropagation()}>
                       <input type="checkbox" checked={!!selectedIds[row.id]} onChange={(e) => toggleSelected(row.id, e.target.checked)} />
@@ -1370,6 +1610,7 @@ export default function ChildrenPage() {
                   <td>{row.queueCategory || '—'}</td>
                   <td>{row.queueDate || '—'}</td>
                   <td>{formatQueueNumber(row.queueNumber)}</td>
+                  <td>{renderQueueShiftBadge(row.queueShift)}</td>
                   <td onClick={(e) => e.stopPropagation()}>
                     <div className="icon-actions">
                       {String(row.queueNumber || '').trim().toUpperCase() === 'ВАУЧЕР' && (
@@ -1385,6 +1626,8 @@ export default function ChildrenPage() {
                             await api.deleteQueueChild(row.id);
                             if (selectedQueueChild?.id === row.id) setSelectedQueueChild(null);
                             await loadQueueChildren();
+                            await loadArchivedEntities();
+                            await loadChildrenCounts();
                           } catch (e) {
                             setError(e?.message || 'Не удалось удалить запись очереди.');
                           }
@@ -1397,7 +1640,80 @@ export default function ChildrenPage() {
                 </tr>
               ))}
               {!sortedQueueRows.length && (
-                <tr><td colSpan={selectionMode ? 10 : 9}>Нет данных</td></tr>
+                <tr><td colSpan={selectionMode ? 11 : 10}>Нет данных</td></tr>
+              )}
+            </tbody>
+          </table>
+        ) : activeList === 'archived' ? (
+          <table className="children-table">
+            <thead>
+              <tr>
+                {selectionMode && <th>✓</th>}
+                <th>Категория</th>
+                <th>ФИО ребенка</th>
+                <th>Телефон</th>
+                <th>Номер/ваучер</th>
+                <th>Дата удаления</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredArchivedRows.map((row) => (
+                <tr key={row.id} className="child-row" onClick={() => setSelectedArchivedEntity(row)}>
+                  {selectionMode && (
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <input type="checkbox" checked={!!selectedIds[row.id]} onChange={(e) => toggleSelected(row.id, e.target.checked)} />
+                    </td>
+                  )}
+                  <td>{row.entityCategory === 'paid' ? 'Платник' : row.entityCategory === 'voucher' ? 'Ваучер' : 'Очередь'}</td>
+                  <td>{row.entityName}</td>
+                  <td>{row.snapshot?.parentPhone || row.snapshot?.phone || '—'}</td>
+                  <td>{row.snapshot?.voucherNumber || formatQueueNumber(row.snapshot?.queueNumber) || '—'}</td>
+                  <td>{row.deletedAt || '—'}</td>
+                  <td onClick={(e) => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      className="icon-btn convert"
+                      title="Вернуть из архива"
+                      onClick={async () => {
+                        try {
+                          const res = await api.restoreArchivedEntity({ id: row.id });
+                          if (res?.success) {
+                            setSelectedArchivedEntity(null);
+                            await loadChildren();
+                            await loadQueueChildren();
+                            await loadArchivedEntities();
+                            await loadChildrenCounts();
+                          }
+                        } catch (e) {
+                          setError(e?.message || 'Не удалось восстановить запись из архива.');
+                        }
+                      }}
+                    >
+                      ↺
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-btn danger"
+                      title="Удалить из архива навсегда"
+                      onClick={async () => {
+                        if (!window.confirm('Удалить запись из архива навсегда?')) return;
+                        try {
+                          await api.deleteArchivedEntity({ id: row.id });
+                          await loadArchivedEntities();
+                          await loadChildrenCounts();
+                        } catch (e) {
+                          setError(e?.message || 'Не удалось удалить архивную запись.');
+                        }
+                      }}
+                    >
+                      🗑
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {!filteredArchivedRows.length && (
+                <tr><td colSpan={selectionMode ? 7 : 6}>Нет данных</td></tr>
               )}
             </tbody>
           </table>
@@ -1462,6 +1778,8 @@ export default function ChildrenPage() {
                           try {
                             await api.deleteChild(row.id);
                             await loadChildren();
+                            await loadArchivedEntities();
+                            await loadChildrenCounts();
                           } catch (e) {
                             setError(e?.message || 'Не удалось удалить ребенка.');
                           }
@@ -1481,7 +1799,7 @@ export default function ChildrenPage() {
         )}
       </div>
       <div className="children-summary">
-        Итого в списке: {activeList === 'queue' ? sortedQueueRows.length : sortedRows.length}
+        Итого в списке: {activeList === 'queue' ? sortedQueueRows.length : activeList === 'archived' ? filteredArchivedRows.length : sortedRows.length}
       </div>
 
       {selectedChild && (
@@ -1511,7 +1829,7 @@ export default function ChildrenPage() {
                 <div className="child-sheet-row"><span>Старт оплаты</span><b>{selectedChild.profile?.paymentStartDate || '—'}</b></div>
                 <div className="child-sheet-row"><span>Последняя оплата</span><b>{selectedChild.profile?.lastPaymentDate || '—'}</b></div>
                 <div className="child-sheet-row"><span>Уроков после оплаты</span><b>{selectedChild.profile?.lessonsCount ?? '—'}</b></div>
-                <div className="child-sheet-row"><span>Текущий цикл</span><b>{selectedChild.profile?.lessonsCount ?? 0}/8</b></div>
+                <div className="child-sheet-row"><span>Текущий цикл</span><b>{selectedChild.profile?.lessonsCount ?? 0}/{selectedChild.profile?.cycleLength || selectedChild._meta?.cycleLength || 8}</b></div>
               </div>
             )}
             {selectedChild.type === 'voucher' && (
@@ -1537,14 +1855,28 @@ export default function ChildrenPage() {
                   <span>Редактировать пометку</span>
                   <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
                     <select
-                      value={selectedChildTagDraft}
-                      onChange={(e) => setSelectedChildTagDraft(e.target.value)}
+                      value={getMessageTagPreset(selectedChildTagDraft)}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        setSelectedChildTagDraft((prev) => {
+                          if (next === 'custom') return getMessageTagPreset(prev) === 'custom' ? prev : '';
+                          return next;
+                        });
+                      }}
                       style={{ minWidth: 180 }}
                     >
                       <option value="">Без пометки</option>
                       <option value="qr">QR</option>
                       <option value="reminder">Напоминание</option>
+                      <option value="custom">Своя пометка</option>
                     </select>
+                    <input
+                      value={getMessageTagPreset(selectedChildTagDraft) === 'custom' ? selectedChildTagDraft : ''}
+                      onChange={(e) => setSelectedChildTagDraft(e.target.value)}
+                      placeholder="Своя пометка"
+                      style={{ minWidth: 220 }}
+                      disabled={getMessageTagPreset(selectedChildTagDraft) !== 'custom'}
+                    />
                     <button
                       type="button"
                       onClick={saveSelectedChildTag}
@@ -1556,6 +1888,77 @@ export default function ChildrenPage() {
                 </label>
               </div>
             )}
+            {selectedChild.type === 'paid' && (
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
+                <button type="button" className="primary" onClick={() => openTransferModal(selectedChild)}>
+                  Перевести в другую группу
+                </button>
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {transferModalData && selectedChild?.type === 'paid' && (
+        <Modal title="Перевод в другую группу" onClose={() => !transferSaving && setTransferModalData(null)}>
+          <div className="form-grid">
+            <label>
+              <div style={{ marginBottom: 6, color: '#97a7c3' }}>Студия</div>
+              <select
+                value={transferModalData.studioId}
+                onChange={(e) => setTransferModalData((prev) => ({ ...prev, studioId: e.target.value, courseId: '', groupId: '' }))}
+                disabled={transferSaving}
+              >
+                <option value="">Выберите...</option>
+                {transferStudios.map((studio) => (
+                  <option key={studio.id} value={studio.id}>{studio.name}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <div style={{ marginBottom: 6, color: '#97a7c3' }}>Кружок</div>
+              <select
+                value={transferModalData.courseId}
+                onChange={(e) => setTransferModalData((prev) => ({ ...prev, courseId: e.target.value, groupId: '' }))}
+                disabled={transferSaving || !transferModalData.studioId}
+              >
+                <option value="">Выберите...</option>
+                {paidTransferCourses.map((course) => (
+                  <option key={course.id} value={course.id}>{course.name}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <div style={{ marginBottom: 6, color: '#97a7c3' }}>Группа</div>
+              <select
+                value={transferModalData.groupId}
+                onChange={(e) => setTransferModalData((prev) => ({ ...prev, groupId: e.target.value }))}
+                disabled={transferSaving || !transferModalData.courseId}
+              >
+                <option value="">Выберите...</option>
+                {transferGroupsOptions.map((group) => (
+                  <option key={group.id} value={group.id}>{group.name}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <div style={{ marginBottom: 6, color: '#97a7c3' }}>Дата перевода</div>
+              <input
+                type="date"
+                value={transferModalData.effectiveDate}
+                onChange={(e) => setTransferModalData((prev) => ({ ...prev, effectiveDate: e.target.value }))}
+                disabled={transferSaving}
+              />
+            </label>
+          </div>
+          <div style={{ marginTop: 12, color: '#97a7c3' }}>
+            История старой группы сохранится. С указанной даты ребенок будет отмечаться уже в новой группе.
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+            <button type="button" onClick={() => setTransferModalData(null)} disabled={transferSaving}>Отмена</button>
+            <button type="button" className="primary" onClick={submitTransferChild} disabled={transferSaving}>
+              {transferSaving ? 'Переводим...' : 'Сохранить перевод'}
+            </button>
           </div>
         </Modal>
       )}
@@ -1577,9 +1980,60 @@ export default function ChildrenPage() {
               <div className="child-sheet-row"><span>Город</span><b>{selectedQueueChild.cityName || '—'}</b></div>
               <div className="child-sheet-row"><span>Студия</span><b>{selectedQueueChild.studioName || '—'}</b></div>
               <div className="child-sheet-row"><span>Номер очереди</span><b>{formatQueueNumber(selectedQueueChild.queueNumber)}</b></div>
+              <div className="child-sheet-row"><span>Было / Стало</span><b>{formatQueueNumber(selectedQueueChild.previousQueueNumber)} / {formatQueueNumber(selectedQueueChild.queueNumber)}</b></div>
+              <div className="child-sheet-row"><span>Сдвиг</span><b>{renderQueueShiftBadge(selectedQueueChild.queueShift)}</b></div>
+              <div className="child-sheet-row"><span>Последнее обновление очереди</span><b>{formatQueueUpdatedAt(selectedQueueChild.queueUpdatedAt)}</b></div>
               <div className="child-sheet-row"><span>Дата постановки</span><b>{selectedQueueChild.queueDate}</b></div>
               <div className="child-sheet-row"><span>Категория очереди</span><b>{selectedQueueChild.queueCategory}</b></div>
               <div className="child-sheet-row full"><span>Комментарий</span><b>{selectedQueueChild.comment || '—'}</b></div>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {selectedArchivedEntity && (
+        <Modal title="Архивная карточка" onClose={() => setSelectedArchivedEntity(null)}>
+          <div className={`child-sheet ${selectedArchivedEntity.entityCategory === 'paid' ? 'paid' : selectedArchivedEntity.entityCategory === 'voucher' ? 'voucher' : 'queue'}`}>
+            <div className="child-sheet-head">
+              <div className="child-sheet-name">{selectedArchivedEntity.entityName}</div>
+              <span className={`child-sheet-type ${selectedArchivedEntity.entityCategory === 'paid' ? 'paid' : selectedArchivedEntity.entityCategory === 'voucher' ? 'voucher' : 'queue'}`}>
+                {selectedArchivedEntity.entityCategory === 'paid' ? 'Платно' : selectedArchivedEntity.entityCategory === 'voucher' ? 'Ваучер' : 'Очередь'}
+              </span>
+            </div>
+            <div className="child-sheet-grid">
+              <div className="child-sheet-row"><span>Город</span><b>{resolveEntityName(cities, selectedArchivedEntity.snapshot?.cityId)}</b></div>
+              <div className="child-sheet-row"><span>Студия</span><b>{resolveEntityName(studios, selectedArchivedEntity.snapshot?.studioId)}</b></div>
+              <div className="child-sheet-row"><span>Кружок</span><b>{resolveEntityName(courses, selectedArchivedEntity.snapshot?.courseId)}</b></div>
+              <div className="child-sheet-row"><span>Группа</span><b>{resolveEntityName(groups, selectedArchivedEntity.snapshot?.groupId)}</b></div>
+              <div className="child-sheet-row"><span>ИИН ребенка</span><b>{selectedArchivedEntity.snapshot?.childIIN || '—'}</b></div>
+              <div className="child-sheet-row"><span>Телефон</span><b>{selectedArchivedEntity.snapshot?.parentPhone || selectedArchivedEntity.snapshot?.phone || '—'}</b></div>
+              <div className="child-sheet-row"><span>ФИО родителя</span><b>{selectedArchivedEntity.snapshot?.parentFullName || '—'}</b></div>
+              <div className="child-sheet-row"><span>ИИН родителя</span><b>{selectedArchivedEntity.snapshot?.parentIIN || '—'}</b></div>
+              <div className="child-sheet-row"><span>Пометка</span><b>{messageTagLabel(selectedArchivedEntity.snapshot?.messageTag)}</b></div>
+              <div className="child-sheet-row"><span>Ваучер/очередь</span><b>{selectedArchivedEntity.snapshot?.voucherNumber || formatQueueNumber(selectedArchivedEntity.snapshot?.queueNumber) || '—'}</b></div>
+              <div className="child-sheet-row"><span>Дата удаления</span><b>{selectedArchivedEntity.deletedAt || '—'}</b></div>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
+              <button
+                type="button"
+                className="primary"
+                onClick={async () => {
+                  try {
+                    const res = await api.restoreArchivedEntity({ id: selectedArchivedEntity.id });
+                    if (res?.success) {
+                      setSelectedArchivedEntity(null);
+                      await loadChildren();
+                      await loadQueueChildren();
+                      await loadArchivedEntities();
+                      await loadChildrenCounts();
+                    }
+                  } catch (e) {
+                    setError(e?.message || 'Не удалось восстановить запись из архива.');
+                  }
+                }}
+              >
+                Вернуть из архива
+              </button>
             </div>
           </div>
         </Modal>
@@ -1886,7 +2340,7 @@ export default function ChildrenPage() {
       )}
 
       {reportOpen && (
-        <Modal title="Настройки отчета" onClose={() => setReportOpen(false)}>
+        <Modal title="Экспорт данных" onClose={() => setReportOpen(false)}>
           <div className="form-grid">
             {getReportFieldsByList(activeList).map((f) => (
               <label key={f.key}>
@@ -2076,15 +2530,32 @@ export default function ChildrenPage() {
               </select>
             </label>
             <label>
-              <div style={{ marginBottom: 6, color: '#97a7c3' }}>Пометка</div>
+              <div style={{ marginBottom: 6, color: '#97a7c3' }}>Тип пометки</div>
               <select
-                value={bulkEditData.messageTag}
-                onChange={(e) => setBulkEditData((v) => ({ ...v, messageTag: e.target.value }))}
+                value={bulkEditData.messageTagMode || ''}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setBulkEditData((v) => ({
+                    ...v,
+                    messageTagMode: next,
+                    messageTag: next === 'custom' ? (v.messageTagMode === 'custom' ? v.messageTag : '') : next
+                  }));
+                }}
               >
                 <option value="">Не менять</option>
                 <option value="qr">QR</option>
                 <option value="reminder">Напоминание</option>
+                <option value="custom">Своя пометка</option>
               </select>
+            </label>
+            <label>
+              <div style={{ marginBottom: 6, color: '#97a7c3' }}>Своя пометка</div>
+              <input
+                value={bulkEditData.messageTagMode === 'custom' ? bulkEditData.messageTag : ''}
+                onChange={(e) => setBulkEditData((v) => ({ ...v, messageTag: e.target.value }))}
+                placeholder="Не менять"
+                disabled={bulkEditData.messageTagMode !== 'custom'}
+              />
             </label>
             <label className="full">
               <div style={{ marginBottom: 6, color: '#97a7c3' }}>Номер ваучера</div>
@@ -2286,6 +2757,12 @@ export default function ChildrenPage() {
                   <div>Добавлено: {qosymshaImportResult.added}</div>
                   <div>Обновлено: {qosymshaImportResult.updated}</div>
                   <div>Пропущено: {qosymshaImportResult.skipped}</div>
+                  {!!qosymshaImportResult.newChildren?.length && (
+                    <div style={{ marginTop: 8 }}>
+                      <b>Новые дети в базе:</b>
+                      <div>{qosymshaImportResult.newChildren.join(', ')}</div>
+                    </div>
+                  )}
                   {!!qosymshaImportResult.errors?.length && (
                     <div style={{ marginTop: 8, color: '#ff9aa5' }}>
                       {qosymshaImportResult.errors.map((err) => <div key={err}>{err}</div>)}
@@ -2405,6 +2882,12 @@ export default function ChildrenPage() {
                   <div>Добавлено: {artsportImportResult.added}</div>
                   <div>Обновлено: {artsportImportResult.updated}</div>
                   <div>Пропущено: {artsportImportResult.skipped}</div>
+                  {!!artsportImportResult.newChildren?.length && (
+                    <div style={{ marginTop: 8 }}>
+                      <b>Новые дети в базе:</b>
+                      <div>{artsportImportResult.newChildren.join(', ')}</div>
+                    </div>
+                  )}
                   {!!artsportImportResult.errors?.length && (
                     <div style={{ marginTop: 8, color: '#ff9aa5' }}>
                       {artsportImportResult.errors.map((err) => <div key={err}>{err}</div>)}
@@ -2446,6 +2929,7 @@ export default function ChildrenPage() {
                     <tr>
                       <th>Ребенок</th>
                       <th>ИИН</th>
+                      <th>Сдвиг</th>
                       <th>Номер</th>
                       <th>Дата постановки</th>
                       <th>Категория</th>
@@ -2458,13 +2942,14 @@ export default function ChildrenPage() {
                         <tr key={`${item.id}-${idx}`}>
                           <td>{item.childFullName || '—'}</td>
                           <td>{item.iin}</td>
+                          <td>{renderQueueShiftBadge(item.queueShift)}</td>
                           <td>{formatQueueNumber(item.queueNumber)}</td>
                           <td>{item.queueDate || '—'}</td>
                           <td>{item.queueCategory || '—'}</td>
                         </tr>
                       ))}
                     {!queueRefreshResult.items.some((x) => x.status === 'ok') && (
-                      <tr><td colSpan={5}>Нет обновленных детей</td></tr>
+                      <tr><td colSpan={6}>Нет обновленных детей</td></tr>
                     )}
                   </tbody>
                 </table>

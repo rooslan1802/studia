@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import { api } from '@renderer/api';
 import Sidebar from '@components/Sidebar';
 import NotificationsBell from '@components/NotificationsBell';
 import ScrollJumpButton from '@components/ScrollJumpButton';
@@ -8,11 +7,13 @@ import DashboardPage from '@pages/DashboardPage';
 import StructurePage from '@pages/StructurePage';
 import ChildrenPage from '@pages/ChildrenPage';
 import PaymentsPage from '@pages/PaymentsPage';
+import AuditPage from '@pages/AuditPage';
 import AttendancePage from '@pages/AttendancePage';
 import NotificationsPage from '@pages/NotificationsPage';
 import WhatsAppPage from '@pages/WhatsAppPage';
 import WhatsAppSettings from '@pages/WhatsAppSettings';
 import DamubalaHelperPage from '@pages/DamubalaHelperPage';
+import SettingsPage from '@pages/SettingsPage';
 
 const BACKEND_URLS = ['http://localhost:47831', 'http://127.0.0.1:47831'];
 
@@ -36,6 +37,8 @@ const pageTitles = {
   '/children': 'Ученики',
   '/attendance': 'Мои табели',
   '/payments': 'Оплаты',
+  '/audit': 'История действий',
+  '/settings': 'Настройки',
   '/notifications': 'Уведомления',
   '/whatsapp': 'WhatsApp Рассылка',
   '/whatsapp-settings': 'Подключение WhatsApp',
@@ -54,11 +57,19 @@ function ChevronIcon({ collapsed }) {
   );
 }
 
+function SettingsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" aria-hidden="true">
+      <path d="M12 8.5a3.5 3.5 0 100 7 3.5 3.5 0 000-7z" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M19 12a7.9 7.9 0 00-.1-1.2l2-1.5-2-3.4-2.4 1a8.7 8.7 0 00-2.1-1.2L14 3h-4l-.4 2.7a8.7 8.7 0 00-2.1 1.2l-2.4-1-2 3.4 2 1.5A7.9 7.9 0 005 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.4-1a8.7 8.7 0 002.1 1.2L10 21h4l.4-2.7a8.7 8.7 0 002.1-1.2l2.4 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 export default function App() {
   const location = useLocation();
   const navigate = useNavigate();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [damubalaStatus, setDamubalaStatus] = useState({ connected: false, syncing: false, error: '' });
   const [whatsappStatus, setWhatsappStatus] = useState({ connected: false, error: '' });
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState('');
@@ -85,13 +96,6 @@ export default function App() {
     return pageTitles[location.pathname] || 'Studia';
   }, [location.pathname]);
 
-  async function loadDamubalaStatus() {
-    const result = await api.getDamubalaConnectionStatus();
-    if (result?.success) {
-      setDamubalaStatus((prev) => ({ ...prev, connected: !!result.connected, error: '' }));
-    }
-  }
-
   async function loadWhatsappStatus() {
     try {
       const { data } = await fetchBackendJson('/api/whatsapp/status');
@@ -102,10 +106,8 @@ export default function App() {
   }
 
   useEffect(() => {
-    loadDamubalaStatus();
     loadWhatsappStatus();
     const timer = window.setInterval(() => {
-      loadDamubalaStatus();
       loadWhatsappStatus();
     }, 15000);
     return () => window.clearInterval(timer);
@@ -242,16 +244,6 @@ export default function App() {
     activateFindMark(0);
   }, [findQuery, findOpen, location.pathname]);
 
-  async function connectDamubalaNow() {
-    setDamubalaStatus((prev) => ({ ...prev, syncing: true, error: '' }));
-    const res = await api.connectDamubala();
-    if (res?.success) {
-      setDamubalaStatus({ connected: true, syncing: false, error: '' });
-    } else {
-      setDamubalaStatus({ connected: false, syncing: false, error: res?.message || 'Не удалось подключить Damubala' });
-    }
-  }
-
   return (
     <div className={`layout${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
       <Sidebar collapsed={sidebarCollapsed} />
@@ -275,13 +267,8 @@ export default function App() {
             >
               WhatsApp {whatsappStatus.connected ? '●' : '○'}
             </button>
-            <button
-              className={`status-chip ${damubalaStatus.connected ? 'ok' : 'danger'}`}
-              onClick={connectDamubalaNow}
-              disabled={damubalaStatus.syncing}
-              title={damubalaStatus.error || (damubalaStatus.connected ? 'Damubala подключен' : 'Подключить Damubala')}
-            >
-              {damubalaStatus.syncing ? 'Damubala...' : `Damubala ${damubalaStatus.connected ? '●' : '○'}`}
+            <button className="bell-btn" onClick={() => navigate('/settings')} title="Настройки" aria-label="Настройки">
+              <SettingsIcon />
             </button>
             <NotificationsBell />
           </div>
@@ -292,7 +279,9 @@ export default function App() {
           <Route path="/children" element={<ChildrenPage />} />
           <Route path="/attendance" element={<AttendancePage />} />
           <Route path="/payments" element={<PaymentsPage />} />
+          <Route path="/audit" element={<AuditPage />} />
           <Route path="/notifications" element={<NotificationsPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
           <Route path="/whatsapp-settings" element={<WhatsAppSettings />} />
           <Route path="/whatsapp" element={<WhatsAppPage />} />
           <Route path="/damubala-helper" element={<DamubalaHelperPage />} />
