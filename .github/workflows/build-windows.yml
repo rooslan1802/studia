@@ -1,11 +1,17 @@
 name: Build Windows
 
 on:
+  push:
+    branches:
+      - main
+      - codex/windows-build-gh
   workflow_dispatch:
 
 jobs:
   build-windows:
     runs-on: windows-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout
@@ -35,3 +41,4 @@ jobs:
             release/*.blockmap
             release/latest*.yml
           if-no-files-found: error
+          retention-days: 14
