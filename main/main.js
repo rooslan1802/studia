@@ -1,7 +1,6 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { autoUpdater } = require('electron-updater');
 
 function loadEnvIfExists() {
   try {
@@ -29,34 +28,6 @@ const whatsappBaileys = require('../backend/services/whatsappBaileys');
 const isDev = !!process.env.VITE_DEV_SERVER_URL;
 let callbackServer = null;
 let mainWindow = null;
-let updateState = {
-  checking: false,
-  available: false,
-  downloaded: false,
-  downloading: false,
-  version: app.getVersion(),
-  latestVersion: '',
-  progressPercent: 0,
-  message: ''
-};
-
-function normalizeUpdaterError(error) {
-  const raw = String(error?.message || error || '').trim();
-  if (/Unable to find latest version on GitHub|Cannot parse releases feed|production release exists|\/releases\/latest/i.test(raw)) {
-    return 'На GitHub пока нет готового релиза обновления для приложения. Нужен обычный Release с файлами latest-mac.yml и mac zip, загруженный через electron-builder.';
-  }
-  return raw || 'Не удалось проверить обновления.';
-}
-
-function sendUpdateState() {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  mainWindow.webContents.send('app:update-state', updateState);
-}
-
-function setUpdateState(patch = {}) {
-  updateState = { ...updateState, ...patch };
-  sendUpdateState();
-}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -65,6 +36,9 @@ function createWindow() {
     minWidth: 1100,
     minHeight: 700,
     backgroundColor: '#0d1117',
+    icon: process.platform === 'win32'
+      ? path.join(__dirname, '..', 'build', 'app.ico')
+      : path.join(__dirname, '..', 'build', 'app.icns'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -79,127 +53,13 @@ function createWindow() {
   }
 }
 
-function configureAutoUpdater() {
-  autoUpdater.autoDownload = false;
-  autoUpdater.autoInstallOnAppQuit = true;
-
-  autoUpdater.on('checking-for-update', () => {
-    setUpdateState({
-      checking: true,
-      available: false,
-      downloaded: false,
-      downloading: false,
-      latestVersion: '',
-      progressPercent: 0,
-      message: 'Проверяем обновления...'
-    });
-  });
-
-  autoUpdater.on('update-available', (info) => {
-    setUpdateState({
-      checking: false,
-      available: true,
-      downloaded: false,
-      downloading: false,
-      latestVersion: String(info?.version || ''),
-      progressPercent: 0,
-      message: `Доступно обновление ${info?.version || ''}`.trim()
-    });
-  });
-
-  autoUpdater.on('update-not-available', (info) => {
-    setUpdateState({
-      checking: false,
-      available: false,
-      downloaded: false,
-      downloading: false,
-      latestVersion: String(info?.version || app.getVersion()),
-      progressPercent: 0,
-      message: 'Установлена актуальная версия.'
-    });
-  });
-
-  autoUpdater.on('download-progress', (progress) => {
-    setUpdateState({
-      checking: false,
-      available: true,
-      downloading: true,
-      downloaded: false,
-      progressPercent: Number(progress?.percent || 0),
-      message: `Скачивание обновления: ${Math.round(Number(progress?.percent || 0))}%`
-    });
-  });
-
-  autoUpdater.on('update-downloaded', (info) => {
-    setUpdateState({
-      checking: false,
-      available: true,
-      downloading: false,
-      downloaded: true,
-      latestVersion: String(info?.version || ''),
-      progressPercent: 100,
-      message: 'Обновление скачано. Можно установить.'
-    });
-  });
-
-  autoUpdater.on('error', (error) => {
-    setUpdateState({
-      checking: false,
-      downloading: false,
-      message: normalizeUpdaterError(error)
-    });
-  });
-
-  ipcMain.handle('app:updates:status', async () => updateState);
-  ipcMain.handle('app:updates:check', async () => {
-    if (isDev) {
-      throw new Error('Проверка обновлений доступна только в собранном приложении.');
-    }
-    try {
-      await autoUpdater.checkForUpdates();
-      return updateState;
-    } catch (error) {
-      const message = normalizeUpdaterError(error);
-      setUpdateState({
-        checking: false,
-        downloading: false,
-        message
-      });
-      throw new Error(message);
-    }
-  });
-  ipcMain.handle('app:updates:download', async () => {
-    if (isDev) {
-      throw new Error('Скачивание обновлений доступно только в собранном приложении.');
-    }
-    await autoUpdater.downloadUpdate();
-    return updateState;
-  });
-  ipcMain.handle('app:updates:install', async () => {
-    if (!updateState.downloaded) {
-      throw new Error('Обновление еще не скачано.');
-    }
-    const response = await dialog.showMessageBox(mainWindow, {
-      type: 'question',
-      buttons: ['Установить сейчас', 'Позже'],
-      defaultId: 0,
-      cancelId: 1,
-      title: 'Установка обновления',
-      message: 'Приложение будет перезапущено для установки обновления.'
-    });
-    if (response.response === 0) {
-      setImmediate(() => autoUpdater.quitAndInstall());
-      return { success: true, installing: true };
-    }
-    return { success: true, installing: false };
-  });
-}
-
 app.whenReady().then(() => {
+  if (process.platform === 'win32') {
+    app.setAppUserModelId('com.studia.manager');
+  }
   const dbPath = path.join(app.getPath('userData'), 'studia.sqlite');
   initializeDatabase(dbPath);
   registerIpcHandlers();
-  configureAutoUpdater();
   callbackServer = startWhatsAppCallbackServer();
   whatsappBaileys.start().catch(() => {});
   createWindow();
@@ -216,7 +76,5 @@ app.on('window-all-closed', () => {
     callbackServer.close();
     callbackServer = null;
   }
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
+  app.quit();
 });
