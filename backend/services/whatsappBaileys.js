@@ -1,7 +1,26 @@
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 
-const AUTH_FOLDER = path.join(process.cwd(), 'auth_info_baileys');
+function resolveAuthFolder() {
+  try {
+    const electron = require('electron');
+    const app = electron?.app;
+    if (app && typeof app.getPath === 'function') {
+      return path.join(app.getPath('userData'), 'auth_info_baileys');
+    }
+  } catch {
+    // fall through to non-electron fallback
+  }
+
+  const cwd = process.cwd();
+  if (cwd && cwd !== path.parse(cwd).root) {
+    return path.join(cwd, 'auth_info_baileys');
+  }
+  return path.join(os.homedir(), '.studia', 'auth_info_baileys');
+}
+
+const AUTH_FOLDER = resolveAuthFolder();
 
 let sock = null;
 let connected = false;
@@ -80,6 +99,7 @@ async function createSocket() {
   connecting = true;
   connected = false;
   lastError = '';
+  fs.mkdirSync(AUTH_FOLDER, { recursive: true });
 
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_FOLDER);
   const latest = await fetchLatestBaileysVersion().catch(() => null);

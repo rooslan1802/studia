@@ -64,29 +64,14 @@ contextBridge.exposeInMainWorld('api', {
   listNotifications: () => ipcRenderer.invoke('notifications:list'),
   listAuditLogs: (filters) => ipcRenderer.invoke('audit:list', filters),
   deleteAuditLog: (id) => ipcRenderer.invoke('audit:delete', id),
+  clearAuditLogs: () => ipcRenderer.invoke('audit:clear'),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (payload) => ipcRenderer.invoke('settings:save', payload),
-  getUpdateStatus: () => ipcRenderer.invoke('app:updates:status'),
-  checkForUpdates: () => ipcRenderer.invoke('app:updates:check'),
-  downloadUpdate: () => ipcRenderer.invoke('app:updates:download'),
-  installUpdate: () => ipcRenderer.invoke('app:updates:install'),
-  onUpdateState: (callback) => {
-    if (typeof callback !== 'function') return () => {};
-    const listener = (_, payload) => callback(payload || {});
-    ipcRenderer.on('app:update-state', listener);
-    return () => ipcRenderer.removeListener('app:update-state', listener);
-  },
 
   getWhatsAppSettings: () => ipcRenderer.invoke('whatsapp:settings-get'),
   saveWhatsAppSettings: (payload) => ipcRenderer.invoke('whatsapp:settings-save', payload),
   sendWhatsAppMessage: (payload) => ipcRenderer.invoke('whatsapp:send', payload),
 
-  generateDamubalaQr: (payload) => ipcRenderer.invoke('damubala:generate-qr', payload),
-  refreshDamubalaPassword: (payload) => ipcRenderer.invoke('damubala:refresh-password', payload),
-  buildDamubalaChildModal: (payload) => ipcRenderer.invoke('damubala:build-child-modal', payload),
-  getDamubalaConnectionStatus: () => ipcRenderer.invoke('damubala:connection-status'),
-  connectDamubala: () => ipcRenderer.invoke('damubala:connect'),
-  refreshDamubalaSigningStats: () => ipcRenderer.invoke('damubala:signing-stats-refresh'),
   fetchDamubalaVouchersPreview: () => ipcRenderer.invoke('damubala:fetch-vouchers-preview'),
   syncDamubalaVouchers: (payload) => ipcRenderer.invoke('damubala:sync-vouchers', payload),
   fetchQosymshaChildrenPreview: () => ipcRenderer.invoke('qosymsha:fetch-children-preview'),
@@ -105,6 +90,4 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('artsport:progress', listener);
     return () => ipcRenderer.removeListener('artsport:progress', listener);
   },
-  pickDamubalaSaveDir: () => ipcRenderer.invoke('damubala:pick-save-dir'),
-  saveDamubalaImages: (payload) => ipcRenderer.invoke('damubala:save-images', payload)
 });

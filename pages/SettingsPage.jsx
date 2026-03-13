@@ -22,17 +22,6 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
-  const [updateState, setUpdateState] = useState({
-    checking: false,
-    available: false,
-    downloaded: false,
-    downloading: false,
-    version: '',
-    latestVersion: '',
-    progressPercent: 0,
-    message: ''
-  });
-  const [updateBusy, setUpdateBusy] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -50,18 +39,7 @@ export default function SettingsPage() {
 
   useEffect(() => {
     load();
-    let unsubscribe = () => {};
-    api.getUpdateStatus?.().then((state) => {
-      if (state) setUpdateState((prev) => ({ ...prev, ...state }));
-    }).catch(() => {});
-    if (api.onUpdateState) {
-      unsubscribe = api.onUpdateState((state) => {
-        setUpdateState((prev) => ({ ...prev, ...(state || {}) }));
-      });
-    }
-    return () => {
-      if (typeof unsubscribe === 'function') unsubscribe();
-    };
+    return undefined;
   }, []);
 
   function updatePayments(key, value) {
@@ -111,45 +89,6 @@ export default function SettingsPage() {
     }
   }
 
-  async function handleCheckUpdates() {
-    setUpdateBusy(true);
-    setError('');
-    setInfo('');
-    try {
-      const state = await api.checkForUpdates();
-      if (state) setUpdateState((prev) => ({ ...prev, ...state }));
-    } catch (e) {
-      setError(e?.message || 'Не удалось проверить обновления.');
-    } finally {
-      setUpdateBusy(false);
-    }
-  }
-
-  async function handleDownloadUpdate() {
-    setUpdateBusy(true);
-    setError('');
-    try {
-      const state = await api.downloadUpdate();
-      if (state) setUpdateState((prev) => ({ ...prev, ...state }));
-    } catch (e) {
-      setError(e?.message || 'Не удалось скачать обновление.');
-    } finally {
-      setUpdateBusy(false);
-    }
-  }
-
-  async function handleInstallUpdate() {
-    setUpdateBusy(true);
-    setError('');
-    try {
-      await api.installUpdate();
-    } catch (e) {
-      setError(e?.message || 'Не удалось установить обновление.');
-    } finally {
-      setUpdateBusy(false);
-    }
-  }
-
   return (
     <section>
       <h1 className="page-title">Настройки</h1>
@@ -160,43 +99,6 @@ export default function SettingsPage() {
           <div style={{ color: '#97a7c3' }}>Загрузка...</div>
         ) : (
           <>
-            <div className="panel" style={{ marginBottom: 16 }}>
-              <div style={{ fontWeight: 700, marginBottom: 10 }}>Обновления приложения</div>
-              <div className="form-grid">
-                <label>
-                  <div style={{ marginBottom: 6, color: '#97a7c3' }}>Текущая версия</div>
-                  <input value={updateState.version || '—'} readOnly />
-                </label>
-                <label>
-                  <div style={{ marginBottom: 6, color: '#97a7c3' }}>Доступная версия</div>
-                  <input value={updateState.latestVersion || '—'} readOnly />
-                </label>
-              </div>
-              <div style={{ color: '#97a7c3', marginTop: 10 }}>
-                {updateState.message || 'Проверка обновлений через GitHub Releases.'}
-              </div>
-              {updateState.downloading && (
-                <div style={{ marginTop: 10, color: '#73e7d5' }}>
-                  Скачивание: {Math.round(Number(updateState.progressPercent || 0))}%
-                </div>
-              )}
-              <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
-                <button type="button" onClick={handleCheckUpdates} disabled={updateBusy || updateState.checking}>
-                  {updateState.checking ? 'Проверяем...' : 'Проверить обновления'}
-                </button>
-                {updateState.available && !updateState.downloaded && (
-                  <button type="button" className="primary" onClick={handleDownloadUpdate} disabled={updateBusy || updateState.downloading}>
-                    {updateState.downloading ? 'Скачивание...' : 'Скачать обновление'}
-                  </button>
-                )}
-                {updateState.downloaded && (
-                  <button type="button" className="primary" onClick={handleInstallUpdate} disabled={updateBusy}>
-                    Установить обновление
-                  </button>
-                )}
-              </div>
-            </div>
-
             <div className="form-grid">
               <label>
                 <div style={{ marginBottom: 6, color: '#97a7c3' }}>Цикл по умолчанию</div>

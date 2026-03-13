@@ -189,8 +189,8 @@ export default function ChildModal({ data, studios, courses, groups, onClose, on
   }
 
   return (
-    <Modal title={form.id ? 'Редактировать ребенка' : 'Добавить ребенка'} onClose={onClose}>
-      <form onSubmit={submit}>
+    <Modal title={form.id ? 'Редактировать ребенка' : 'Добавить ребенка'} onClose={onClose} modalClassName="child-modal">
+      <form onSubmit={submit} className="child-modal-form">
         <div className="form-grid">
           <label>
             <div style={{ marginBottom: 6, color: '#97a7c3' }}>Студия</div>

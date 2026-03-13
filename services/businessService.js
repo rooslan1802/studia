@@ -1,6 +1,5 @@
 const { getDb } = require('../database');
 const { calculateAge, toIsoDate } = require('./childAge');
-const { getDamubalaConnectionStatus } = require('./damubalaSyncService');
 const repository = require('./repository');
 
 function monthRange(ym) {
@@ -436,28 +435,6 @@ async function getDashboardData() {
     .sort((a, b) => a.queueNumber - b.queueNumber)
     .slice(0, 50);
 
-  const signingStats = getDamubalaConnectionStatus().signingStats || {
-    available: false,
-    totalSigned: 0,
-    totalUnsigned: 0,
-    byApplication: [],
-    updatedAt: ''
-  };
-  const signingPlatforms = {
-    damubala: {
-      available: Boolean(signingStats.available),
-      signed: Number(signingStats.totalSigned || 0),
-      unsigned: Number(signingStats.totalUnsigned || 0),
-      updatedAt: String(signingStats.updatedAt || '')
-    },
-    qosymsha: {
-      available: false,
-      signed: 0,
-      unsigned: 0,
-      updatedAt: ''
-    }
-  };
-
   return {
     totalChildren: counts.totalChildren || 0,
     totalVouchers: counts.totalVouchers || 0,
@@ -467,9 +444,7 @@ async function getDashboardData() {
     overduePayments: payments.slice(0, 5),
     voucherEndingSoon: notifications.filter((x) => x.type === 'voucher-ending-soon').slice(0, 5),
     soonVoucherQueue,
-    attendance,
-    signingStats,
-    signingPlatforms
+    attendance
   };
 }
 

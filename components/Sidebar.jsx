@@ -8,7 +8,6 @@ const navItems = [
   { to: '/structure', label: 'Моя организация', icon: OrganizationIcon },
   { to: '/children', label: 'Ученики', icon: ChildIcon },
   { to: '/attendance', label: 'Мои табели', icon: AttendanceIcon },
-  { to: '/damubala-helper', label: 'Дамубала помощник', icon: QrIcon },
   { to: '/payments', label: 'Оплаты', icon: MoneyIcon },
   { to: '/audit', label: 'Аудит', icon: AuditIcon },
   { to: '/whatsapp', label: 'WhatsApp', icon: WhatsAppIcon }
@@ -58,14 +57,6 @@ function AuditIcon() {
   return (
     <svg viewBox="0 0 24 24" width="20" height="20" fill="none" aria-hidden="true">
       <path d="M7 4.5h8l2.5 2.5v12H7zM9.5 9.5h6M9.5 12.5h6M9.5 15.5h4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function QrIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" aria-hidden="true">
-      <path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM16 14h1M14 14h1M19 14h1M14 17h1M16 19h4M19 16h1" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

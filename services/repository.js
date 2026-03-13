@@ -423,6 +423,15 @@ function deleteAuditLog(id) {
   return { success: true, id: auditId };
 }
 
+function clearAuditLogs() {
+  const db = getDb();
+  const result = db.prepare('DELETE FROM AuditLogs').run();
+  return {
+    success: true,
+    deletedCount: Number(result.changes || 0)
+  };
+}
+
 function computeAgeForProfile(profile, previousProfile) {
   const today = toIsoDate(new Date());
   const hasManualAge = String(profile.manualAge ?? '').trim() !== '';
@@ -2401,10 +2410,34 @@ function cancelPaymentTransaction(payload) {
   if (!txId) throw new Error('Не указан платеж для отмены.');
 
   const txn = db.transaction(() => {
-    const tx = db.prepare('SELECT id, childId FROM PaymentTransactions WHERE id = ?').get(txId);
+    const tx = db.prepare('SELECT id, childId, paidDate FROM PaymentTransactions WHERE id = ?').get(txId);
     if (!tx) throw new Error('Платеж не найден.');
 
     db.prepare('DELETE FROM PaymentTransactions WHERE id = ?').run(txId);
+
+    const linkedComments = db.prepare(`
+      SELECT id, promisedDate, duePaymentIndex
+      FROM PaymentComments
+      WHERE childId = ?
+        AND status = 'paid'
+        AND paidDate = ?
+      ORDER BY id DESC
+    `).all(tx.childId, tx.paidDate);
+
+    linkedComments.forEach((row) => {
+      if (row.promisedDate || row.duePaymentIndex != null) {
+        db.prepare(`
+          UPDATE PaymentComments
+          SET status = 'pending',
+              paidDate = NULL,
+              paidOnTime = NULL,
+              updatedAt = ?
+          WHERE id = ?
+        `).run(toIsoDateTime(new Date()), row.id);
+      } else {
+        db.prepare('DELETE FROM PaymentComments WHERE id = ?').run(row.id);
+      }
+    });
 
     const lastTx = db
       .prepare('SELECT paidDate FROM PaymentTransactions WHERE childId = ? ORDER BY id DESC LIMIT 1')
@@ -2954,6 +2987,7 @@ module.exports = {
   addAuditLog,
   listAuditLogs,
   deleteAuditLog,
+  clearAuditLogs,
   getAppSettings,
   saveAppSettings,
   listArchivedEntities,

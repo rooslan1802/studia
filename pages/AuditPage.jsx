@@ -223,6 +223,20 @@ export default function AuditPage() {
     }
   }
 
+  async function handleClearLogs() {
+    if (!window.confirm('Очистить всю историю аудита? Это действие нельзя отменить.')) return;
+    try {
+      setLoading(true);
+      setError('');
+      await api.clearAuditLogs();
+      setLogs([]);
+    } catch (e) {
+      setError(e?.message || 'Не удалось очистить историю аудита.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
     <section>
       <h1 className="page-title">История действий</h1>
@@ -261,6 +275,9 @@ export default function AuditPage() {
             onChange={(e) => setFilters((prev) => ({ ...prev, query: e.target.value }))}
             placeholder="Поиск по описанию"
           />
+          <button type="button" className="danger" onClick={handleClearLogs} disabled={loading || !logs.length}>
+            Очистить историю
+          </button>
           <button type="button" className="primary" onClick={load} disabled={loading}>
             {loading ? 'Загрузка...' : 'Обновить'}
           </button>

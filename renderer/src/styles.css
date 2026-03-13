@@ -446,6 +446,21 @@ th {
   overscroll-behavior: contain;
 }
 
+.child-modal {
+  width: min(860px, calc(100vw - 72px));
+  max-height: calc(100vh - 56px);
+  padding: 16px 18px;
+}
+
+.child-modal .modal-header {
+  margin-bottom: 10px;
+}
+
+.child-modal-form {
+  display: grid;
+  gap: 12px;
+}
+
 .modal-header {
   display: flex;
   justify-content: space-between;
@@ -462,6 +477,21 @@ th {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
+}
+
+.child-modal .form-grid {
+  gap: 8px 18px;
+}
+
+.child-modal label > div {
+  margin-bottom: 4px !important;
+}
+
+.child-modal input,
+.child-modal select,
+.child-modal textarea {
+  min-height: 42px;
+  padding: 10px 12px;
 }
 
 .form-grid .full {
@@ -3493,4 +3523,35 @@ mark.inpage-find-mark-active {
 
 .structure-v3-copy-tools select {
   min-width: 220px;
+}
+
+.segment-tabs {
+  display: inline-flex;
+  gap: 8px;
+  padding: 6px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(10, 19, 33, 0.86);
+  margin-bottom: 18px;
+}
+
+.segment-tabs button {
+  min-width: 188px;
+  border-radius: 14px;
+  padding: 12px 18px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #c8d7ec;
+  font-weight: 700;
+}
+
+.segment-tabs button.active {
+  color: #ecfbff;
+  border-color: rgba(87, 236, 225, 0.85);
+  background: linear-gradient(180deg, rgba(64, 169, 172, 0.35), rgba(39, 68, 91, 0.3));
+  box-shadow: inset 0 0 0 1px rgba(87, 236, 225, 0.18);
+}
+
+.attendance-tabs {
+  display: inline-flex;
 }

@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@renderer/api';
 
 const BACKEND_URLS = ['http://localhost:47831', 'http://127.0.0.1:47831'];
-const QR_STATUS_KEY = 'studia.damubala.qr.status.v1';
 const WHATSAPP_LOGS_KEY = 'studia.whatsapp.logs.v1';
 
 function getGlobalWhatsAppLogsCache() {
@@ -62,21 +61,6 @@ function compareValues(a, b, direction = 'asc') {
   return String(av).localeCompare(String(bv), 'ru', { sensitivity: 'base' }) * dir;
 }
 
-function loadQrStatusMap() {
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(QR_STATUS_KEY) || '{}');
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function qrStatusText(value) {
-  if (value === 'has-qr') return 'QR есть';
-  if (value === 'no-qr') return 'QR нет';
-  return 'Не проверен';
-}
-
 function loadCachedWhatsAppLogs() {
   try {
     const parsed = JSON.parse(window.localStorage.getItem(WHATSAPP_LOGS_KEY) || '[]');
@@ -96,15 +80,11 @@ export default function WhatsAppPage() {
   const [monthOffset, setMonthOffset] = useState(0);
   const [allPayments, setAllPayments] = useState([]);
   const [allChildren, setAllChildren] = useState([]);
-  const [qrStatusMap, setQrStatusMap] = useState({});
-
   const [paidMessage, setPaidMessage] = useState('Здравствуйте! Подошло время оплаты.');
-  const [qrMessage, setQrMessage] = useState('Здравствуйте! Подпишите, пожалуйста, табель.');
   const [reminderMessage, setReminderMessage] = useState('Здравствуйте! Напоминание по ребенку.');
 
   const [intervalSec, setIntervalSec] = useState(35);
   const [selectedPaid, setSelectedPaid] = useState({});
-  const [selectedQr, setSelectedQr] = useState({});
   const [selectedReminder, setSelectedReminder] = useState({});
 
   const [sending, setSending] = useState(false);
@@ -114,7 +94,6 @@ export default function WhatsAppPage() {
   const logsHydratedRef = useRef(false);
 
   const [paidSort, setPaidSort] = useState({ key: 'childFullName', direction: 'asc' });
-  const [qrSort, setQrSort] = useState({ key: 'childFullName', direction: 'asc' });
   const [reminderSort, setReminderSort] = useState({ key: 'childFullName', direction: 'asc' });
 
   const selectedMonth = useMemo(() => monthIso(monthOffset), [monthOffset]);
@@ -132,25 +111,6 @@ export default function WhatsAppPage() {
       }))
       .filter((x) => x.parentPhone),
     [allPayments, selectedMonth]
-  );
-
-  const qrRecipients = useMemo(
-    () => allChildren
-      .filter((x) => String(x.messageTag || '').trim().toLowerCase() === 'qr')
-      .map((x) => ({
-        id: `qr-${x.id}`,
-        childId: x.id,
-        childFullName: x.childName,
-        childAge: x.childAge,
-        cityName: x.cityName,
-        studioName: x.studioName,
-        courseName: x.courseName,
-        parentPhone: normalizePhone(x.parentPhone),
-        parentIIN: String(x.parentIIN || '').replace(/\D/g, ''),
-        qrStatus: qrStatusMap[x.id] || ''
-      }))
-      .filter((x) => x.parentPhone && x.qrStatus === 'has-qr'),
-    [allChildren, qrStatusMap]
   );
 
   const reminderRecipients = useMemo(
@@ -176,12 +136,6 @@ export default function WhatsAppPage() {
     return rows;
   }, [paidRecipients, paidSort]);
 
-  const qrRows = useMemo(() => {
-    const rows = [...qrRecipients];
-    rows.sort((a, b) => compareValues(a[qrSort.key], b[qrSort.key], qrSort.direction));
-    return rows;
-  }, [qrRecipients, qrSort]);
-
   const reminderRows = useMemo(() => {
     const rows = [...reminderRecipients];
     rows.sort((a, b) => compareValues(a[reminderSort.key], b[reminderSort.key], reminderSort.direction));
@@ -189,7 +143,6 @@ export default function WhatsAppPage() {
   }, [reminderRecipients, reminderSort]);
 
   const selectedPaidRecipients = useMemo(() => paidRows.filter((x) => selectedPaid[x.id]), [paidRows, selectedPaid]);
-  const selectedQrRecipients = useMemo(() => qrRows.filter((x) => selectedQr[x.id]), [qrRows, selectedQr]);
   const selectedReminderRecipients = useMemo(() => reminderRows.filter((x) => selectedReminder[x.id]), [reminderRows, selectedReminder]);
 
   async function loadStatus() {
@@ -215,6 +168,8 @@ export default function WhatsAppPage() {
         setQrCode(data.qr);
       } else if (!ok) {
         setResult(data?.error || 'Не удалось получить QR');
+      } else if (!data?.qr) {
+        setResult(data?.error || 'QR пока не готов. Нажмите еще раз через пару секунд.');
       }
     } catch (error) {
       setResult(error?.message || 'Ошибка подключения');
@@ -230,7 +185,6 @@ export default function WhatsAppPage() {
     ]);
     setAllPayments(Array.isArray(payments) ? payments : []);
     setAllChildren(Array.isArray(children) ? children : []);
-    setQrStatusMap(loadQrStatusMap());
   }
 
   useEffect(() => {
@@ -259,14 +213,6 @@ export default function WhatsAppPage() {
   }, [paidRows]);
 
   useEffect(() => {
-    setSelectedQr((prev) => {
-      const next = {};
-      qrRows.forEach((item) => { next[item.id] = prev[item.id] ?? true; });
-      return next;
-    });
-  }, [qrRows]);
-
-  useEffect(() => {
     setSelectedReminder((prev) => {
       const next = {};
       reminderRows.forEach((item) => { next[item.id] = prev[item.id] ?? true; });
@@ -277,7 +223,7 @@ export default function WhatsAppPage() {
   async function toggleStatusPanel() {
     const next = !showStatusPanel;
     setShowStatusPanel(next);
-    if (next && !status.connected && !qrCode) {
+    if (next && !status.connected) {
       await loadQr();
     }
   }
@@ -355,91 +301,8 @@ export default function WhatsAppPage() {
     await sendRows(selectedReminderRecipients, async () => ({ text }), 'напоминание');
   }
 
-  async function sendQrBulk() {
-    if (sending) return;
-    if (!status.connected) {
-      setResult('WhatsApp не подключен. Откройте Статус и подключите через QR.');
-      return;
-    }
-    if (!selectedQrRecipients.length) {
-      setResult('Выберите получателей для отправки.');
-      return;
-    }
-
-    const text = (qrMessage || '').trim();
-    if (!text) {
-      setResult('Введите текст сообщения для вкладки QR.');
-      return;
-    }
-
-    setResult('');
-    setLog((prev) => [...prev, `--- Старт рассылки (QR) ${new Date().toLocaleString()} ---`]);
-    setSending(true);
-    setProgress({ total: selectedQrRecipients.length, sent: 0, failed: 0, current: '' });
-
-    let sent = 0;
-    let failed = 0;
-
-    for (let index = 0; index < selectedQrRecipients.length; index += 1) {
-      const row = selectedQrRecipients[index];
-      setProgress((prev) => ({ ...prev, current: `${row.childFullName} (${row.parentPhone})` }));
-
-      try {
-        if (!row.parentIIN || row.parentIIN.length !== 12) {
-          throw new Error('Нет валидного ИИН родителя для генерации QR');
-        }
-
-        const modal = await api.buildDamubalaChildModal({
-          iin: row.parentIIN,
-          childName: row.childFullName,
-          defaultPassword1: 'Aa123456@',
-          defaultPassword2: 'Aa123456!'
-        });
-
-        if (!modal?.success || !modal?.modalImageDataUrl) {
-          throw new Error(modal?.message || 'Не удалось подготовить QR модалку');
-        }
-
-        const { ok, data } = await fetchBackendJson('/api/whatsapp/send', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            phone: row.parentPhone,
-            text,
-            imageDataUrl: modal.modalImageDataUrl
-          })
-        });
-
-        if (!ok || !data?.success) {
-          throw new Error(data?.error || 'Ошибка отправки');
-        }
-
-        sent += 1;
-        setLog((prev) => [...prev, `Отправлено (QR): ${row.childFullName} (${row.parentPhone})`]);
-      } catch (error) {
-        failed += 1;
-        setLog((prev) => [...prev, `Ошибка (QR): ${row.childFullName} — ${error?.message || 'Failed to fetch'}`]);
-      }
-
-      setProgress((prev) => ({ ...prev, sent, failed }));
-      if (index < selectedQrRecipients.length - 1) {
-        const delayMs = Math.max(1, Number(intervalSec || 0)) * 1000;
-        await sleep(delayMs);
-      }
-    }
-
-    setProgress((prev) => ({ ...prev, current: '' }));
-    setSending(false);
-    await loadRecipients();
-    setResult(`Готово. Отправлено: ${sent}, ошибок: ${failed}`);
-  }
-
   function togglePaidSort(key) {
     setPaidSort((prev) => ({ key, direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc' }));
-  }
-
-  function toggleQrSort(key) {
-    setQrSort((prev) => ({ key, direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc' }));
   }
 
   function toggleReminderSort(key) {
@@ -456,7 +319,7 @@ export default function WhatsAppPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
         <div>
           <h1 className="page-title">WhatsApp</h1>
-          <p className="page-subtitle" style={{ marginBottom: 0 }}>Рассылка: платники, QR для подписи и отдельная вкладка Напоминание.</p>
+          <p className="page-subtitle" style={{ marginBottom: 0 }}>Рассылка: платники и отдельная вкладка Напоминание.</p>
         </div>
         <button type="button" className="primary" onClick={toggleStatusPanel}>
           {status.connected ? 'Статус: подключен' : 'Статус: не подключено'}
@@ -473,7 +336,7 @@ export default function WhatsAppPage() {
           {!status.connected && (
             <div className="whatsapp-connect-row">
               <div className="status-muted">Сканируйте QR через WhatsApp → Связанные устройства</div>
-              {loadingQr && !qrCode ? <div className="whatsapp-spinner" /> : null}
+              {loadingQr ? <div className="whatsapp-spinner" /> : null}
               {qrCode ? <img src={qrCode} alt="WhatsApp QR" className="whatsapp-qr" /> : null}
               <div className="whatsapp-actions">
                 <button type="button" onClick={loadQr}>Обновить QR</button>
@@ -485,7 +348,6 @@ export default function WhatsAppPage() {
 
       <div className="children-list-tabs" style={{ marginTop: 16 }}>
         <button className={mode === 'paid' ? 'tab-active' : ''} onClick={() => setMode('paid')}>Платники</button>
-        <button className={mode === 'qr' ? 'tab-active' : ''} onClick={() => setMode('qr')}>QR для подписи</button>
         <button className={mode === 'reminder' ? 'tab-active' : ''} onClick={() => setMode('reminder')}>Напоминание</button>
       </div>
 
@@ -535,58 +397,6 @@ export default function WhatsAppPage() {
                   </tr>
                 ))}
                 {!paidRows.length && <tr><td colSpan={5}>Нет получателей за выбранный месяц</td></tr>}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {mode === 'qr' && (
-        <div className="panel" style={{ marginTop: 16 }}>
-          <p className="page-subtitle" style={{ marginBottom: 12 }}>Список только тех детей, у кого уже есть QR для подписи.</p>
-          <div className="form-grid">
-            <label className="full">
-              <div style={{ marginBottom: 6, color: '#97a7c3' }}>Сообщение (ручной ввод)</div>
-              <textarea rows={3} value={qrMessage} onChange={(e) => setQrMessage(e.target.value)} />
-            </label>
-          </div>
-
-          <div className="row-actions" style={{ marginTop: 12 }}>
-            <button type="button" onClick={() => setSelectedQr(Object.fromEntries(qrRows.map((x) => [x.id, true])))}>Выбрать всех</button>
-            <button type="button" onClick={() => setSelectedQr(Object.fromEntries(qrRows.map((x) => [x.id, false])))}>Снять всех</button>
-            <button type="button" className="primary" disabled={sending || !selectedQrRecipients.length} onClick={sendQrBulk}>
-              {sending ? 'Отправка...' : `Отправить (${selectedQrRecipients.length})`}
-            </button>
-          </div>
-
-          <div className="panel" style={{ marginTop: 12, padding: 0, overflow: 'auto' }}>
-            <table>
-              <thead>
-                <tr>
-                  <th>Выбор</th>
-                  <th><button type="button" className="th-sort-btn" onClick={() => toggleQrSort('childFullName')}>Ребенок {sortArrow(qrSort, 'childFullName')}</button></th>
-                  <th><button type="button" className="th-sort-btn" onClick={() => toggleQrSort('childAge')}>Возраст {sortArrow(qrSort, 'childAge')}</button></th>
-                  <th><button type="button" className="th-sort-btn" onClick={() => toggleQrSort('cityName')}>Город {sortArrow(qrSort, 'cityName')}</button></th>
-                  <th><button type="button" className="th-sort-btn" onClick={() => toggleQrSort('studioName')}>Студия {sortArrow(qrSort, 'studioName')}</button></th>
-                  <th><button type="button" className="th-sort-btn" onClick={() => toggleQrSort('courseName')}>Кружок {sortArrow(qrSort, 'courseName')}</button></th>
-                  <th><button type="button" className="th-sort-btn" onClick={() => toggleQrSort('parentPhone')}>Телефон {sortArrow(qrSort, 'parentPhone')}</button></th>
-                  <th>Статус</th>
-                </tr>
-              </thead>
-              <tbody>
-                {qrRows.map((row) => (
-                  <tr key={row.id}>
-                    <td><input type="checkbox" checked={!!selectedQr[row.id]} onChange={(e) => setSelectedQr((prev) => ({ ...prev, [row.id]: e.target.checked }))} /></td>
-                    <td>{row.childFullName}</td>
-                    <td>{row.childAge ?? '—'}</td>
-                    <td>{row.cityName || '—'}</td>
-                    <td>{row.studioName || '—'}</td>
-                    <td>{row.courseName || '—'}</td>
-                    <td>{row.parentPhone}</td>
-                    <td>{qrStatusText(row.qrStatus)}</td>
-                  </tr>
-                ))}
-                {!qrRows.length && <tr><td colSpan={8}>Нет детей с готовым QR</td></tr>}
               </tbody>
             </table>
           </div>

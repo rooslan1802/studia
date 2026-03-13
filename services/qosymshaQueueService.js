@@ -14,6 +14,27 @@ function extractFirst(html, regex) {
   return m ? cleanText(m[1]) : '';
 }
 
+function flattenHtml(html) {
+  return cleanText(
+    String(html || '')
+      .replace(/<br\s*\/?>/gi, ' ')
+      .replace(/<\/(div|p|section|article|h[1-6]|li|tr|td|th)>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+  );
+}
+
+function extractTextByLabel(text, label, stopLabels = []) {
+  const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const stops = stopLabels
+    .map((item) => item.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('|');
+  const regex = stops
+    ? new RegExp(`${escapedLabel}\\s*:?\\s*([\\s\\S]*?)(?=\\s*(?:${stops})\\s*:?)`, 'i')
+    : new RegExp(`${escapedLabel}\\s*:?\\s*([\\s\\S]+)$`, 'i');
+  const match = regex.exec(text);
+  return match ? cleanText(match[1]) : '';
+}
+
 function extractCsrf(html) {
   return (
     extractFirst(html, /<meta[^>]*name=["']csrf-token["'][^>]*content=["']([^"']+)["']/i) ||
@@ -22,25 +43,18 @@ function extractCsrf(html) {
 }
 
 function extractQueueData(html) {
-  const queueNumberRaw = extractFirst(
-    html,
-    /class=["'][^"']*check-voucher-row__number[^"']*["'][^>]*>([\s\S]*?)<\/[^>]+>/i
-  );
-  const queueNumber = queueNumberRaw.replace('#', '').trim();
-
-  const statementBlockMatch = /class=["'][^"']*voucher-box--statement[^"']*["'][^>]*>([\s\S]*?)<\/section>/i.exec(html);
-  const statementBlock = statementBlockMatch ? statementBlockMatch[1] : html;
-  const submittedAt = extractFirst(statementBlock, /<p[^>]*>[\s\S]*?Подано([\s\S]*?)<\/p>/i);
-
-  const category = extractFirst(
-    html,
-    /class=["'][^"']*enrollment-bar--violet[^"']*["'][^>]*>([\s\S]*?)<\/[^>]+>/i
-  );
+  const text = flattenHtml(html);
+  const submittedAt = extractTextByLabel(text, 'Подано', ['Статус', 'Вид очереди', 'Категория очереди', 'Очередность']);
+  const category = extractTextByLabel(text, 'Категория очереди', ['Очередность', 'СВЕДЕНИЯ О ЗАЧИСЛЕНИИ', 'Информация не найдена']);
+  const status = extractTextByLabel(text, 'Статус', ['Вид очереди', 'Категория очереди', 'Очередность', 'СВЕДЕНИЯ О ЗАЧИСЛЕНИИ']);
+  const queuePositionRaw = extractTextByLabel(text, 'Очередность', ['СВЕДЕНИЯ О ЗАЧИСЛЕНИИ', 'Информация не найдена']);
+  const queueNumber = extractFirst(queuePositionRaw, /(\d+)\s*(?:из|\/)\s*\d+/i) || extractFirst(queuePositionRaw, /(\d+)/i);
 
   return {
     queueNumber,
     queueDate: submittedAt,
-    queueCategory: category
+    queueCategory: category,
+    queueStatus: status
   };
 }
 
@@ -84,7 +98,7 @@ async function checkQueueByIin(iin) {
   });
 
   const html = await checkRes.text();
-  if (!html || !html.includes('check-voucher-row')) {
+  if (!html || !/Проверка\s+для\s+ИИН|СВЕДЕНИЯ\s+ОБ\s+ОЧЕРЕДНОСТИ|Очередность/i.test(html)) {
     throw new Error('Очередь не найдена');
   }
 

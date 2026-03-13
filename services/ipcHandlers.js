@@ -12,12 +12,8 @@ const {
   getNotificationsList
 } = require('./businessService');
 const whatsappService = require('./whatsappService');
-const { generateQrForIin, buildChildQrModal } = require('./damubalaQrService');
 const {
-  fetchActiveVouchersPreviewWithLogin,
-  getDamubalaConnectionStatus,
-  ensureDamubalaLoginWithWindow,
-  getDamubalaSigningStats
+  fetchActiveVouchersPreviewWithLogin
 } = require('./damubalaSyncService');
 const { fetchQosymshaChildrenPreviewWithLogin } = require('./qosymshaSyncService');
 const { fetchArtsportChildrenPreviewWithLogin } = require('./artsportSyncService');
@@ -32,8 +28,7 @@ function backupTimestamp(now = new Date()) {
 }
 
 function resolveBackupsDir() {
-  const rootPath = app.getAppPath();
-  return path.join(rootPath, 'database', 'backups');
+  return path.join(app.getPath('userData'), 'backups');
 }
 
 function ensureBackupsDir() {
@@ -541,6 +536,7 @@ function registerIpcHandlers() {
   ipcMain.handle('notifications:list', async () => getNotificationsList());
   ipcMain.handle('audit:list', async (_, filters) => repository.listAuditLogs(filters || {}));
   ipcMain.handle('audit:delete', async (_, id) => repository.deleteAuditLog(id));
+  ipcMain.handle('audit:clear', async () => repository.clearAuditLogs());
   ipcMain.handle('settings:get', async () => repository.getAppSettings());
   ipcMain.handle('settings:save', async (_, payload) => repository.saveAppSettings(payload || {}));
 
@@ -586,53 +582,6 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('damubala:generate-qr', async (_, payload = {}) => {
-    try {
-      return await generateQrForIin(payload);
-    } catch (error) {
-      return {
-        success: false,
-        code: 'internal-error',
-        message: error?.message || 'Не удалось сгенерировать QR'
-      };
-    }
-  });
-
-  ipcMain.handle('damubala:refresh-password', async (_, payload = {}) => {
-    try {
-      return await generateQrForIin({ ...payload, passwordOnly: true });
-    } catch (error) {
-      return {
-        success: false,
-        code: 'internal-error',
-        message: error?.message || 'Не удалось обновить пароль'
-      };
-    }
-  });
-
-  ipcMain.handle('damubala:build-child-modal', async (_, payload = {}) => {
-    try {
-      const result = await buildChildQrModal(payload);
-      if (!result?.success || !result?.item?.qrDataUrl) {
-        return result;
-      }
-      const buffer = await renderModalPngBuffer({
-        qrDataUrl: result.item.qrDataUrl,
-        childName: payload.childName || result.item.childLabel || 'Ребенок'
-      });
-      return {
-        ...result,
-        modalImageDataUrl: `data:image/png;base64,${buffer.toString('base64')}`
-      };
-    } catch (error) {
-      return {
-        success: false,
-        code: 'internal-error',
-        message: error?.message || 'Не удалось подготовить QR модалку'
-      };
-    }
-  });
-
   ipcMain.handle('damubala:fetch-vouchers-preview', async () => {
     try {
       const syncData = await fetchActiveVouchersPreviewWithLogin();
@@ -642,33 +591,6 @@ function registerIpcHandlers() {
         success: false,
         message: error?.message || 'Не удалось получить данные из Damubala.'
       };
-    }
-  });
-
-  ipcMain.handle('damubala:connection-status', async () => {
-    try {
-      return { success: true, ...getDamubalaConnectionStatus() };
-    } catch (error) {
-      return { success: false, message: error?.message || 'Не удалось получить статус Damubala.' };
-    }
-  });
-
-  ipcMain.handle('damubala:connect', async () => {
-    try {
-      await ensureDamubalaLoginWithWindow();
-      const signingStats = await getDamubalaSigningStats();
-      return { success: true, connected: true, signingStats };
-    } catch (error) {
-      return { success: false, message: error?.message || 'Не удалось подключиться к Damubala.' };
-    }
-  });
-
-  ipcMain.handle('damubala:signing-stats-refresh', async () => {
-    try {
-      const signingStats = await getDamubalaSigningStats();
-      return { success: true, signingStats };
-    } catch (error) {
-      return { success: false, message: error?.message || 'Не удалось обновить статистику подписей.' };
     }
   });
 
@@ -767,62 +689,6 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('damubala:pick-save-dir', async () => {
-    const result = await dialog.showOpenDialog({
-      properties: ['openDirectory', 'createDirectory'],
-      title: 'Выберите папку для сохранения QR'
-    });
-
-    if (result.canceled || !result.filePaths?.length) {
-      return { success: false, canceled: true };
-    }
-
-    return { success: true, directoryPath: result.filePaths[0] };
-  });
-
-  ipcMain.handle('damubala:save-images', async (_, payload = {}) => {
-    try {
-      const directoryPath = String(payload.directoryPath || '').trim();
-      const files = Array.isArray(payload.files) ? payload.files : [];
-      if (!directoryPath || !files.length) {
-        return { success: false, message: 'Нет данных для сохранения' };
-      }
-
-      fs.mkdirSync(directoryPath, { recursive: true });
-
-      const savedPaths = [];
-      for (const file of files) {
-        const title = sanitizeFileName(file?.name || 'qr');
-        const filePath = uniquePath(path.join(directoryPath, `${title}.png`));
-        const qrDataUrl = String(file?.qrDataUrl || '');
-        if (!qrDataUrl) continue;
-        let buffer = null;
-        const m = qrDataUrl.match(/^data:image\/[a-zA-Z0-9.+-]+;base64,(.+)$/);
-        if (m?.[1]) {
-          buffer = Buffer.from(m[1], 'base64');
-        } else {
-          buffer = await renderModalPngBuffer({
-            qrDataUrl,
-            childName: file?.childLabel || file?.name || 'Ребенок'
-          });
-        }
-        if (!buffer) continue;
-        fs.writeFileSync(filePath, buffer);
-        savedPaths.push(filePath);
-      }
-
-      return {
-        success: true,
-        savedCount: savedPaths.length,
-        savedPaths
-      };
-    } catch (error) {
-      return {
-        success: false,
-        message: error?.message || 'Не удалось сохранить файлы'
-      };
-    }
-  });
 }
 
 module.exports = { registerIpcHandlers };
