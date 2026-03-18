@@ -139,10 +139,12 @@ function configureAutoUpdater() {
   });
 
   autoUpdater.on('error', (error) => {
+    const msg = String(error?.message || 'Не удалось проверить обновления.');
+    const shortMsg = msg.split('\n')[0].slice(0, 200);
     setUpdateState({
       checking: false,
       downloading: false,
-      message: error?.message || 'Не удалось проверить обновления.'
+      message: shortMsg
     });
   });
 

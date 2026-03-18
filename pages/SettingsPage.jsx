@@ -114,7 +114,8 @@ export default function SettingsPage() {
       const state = await api.checkForUpdates();
       setUpdateStatus(state || {});
     } catch (e) {
-      setUpdateError(e?.message || 'Не удалось проверить обновления.');
+      const msg = String(e?.message || 'Не удалось проверить обновления.');
+      setUpdateError(msg.split('\n')[0].slice(0, 200));
     }
   }
 
@@ -124,7 +125,8 @@ export default function SettingsPage() {
       const state = await api.downloadUpdate();
       setUpdateStatus(state || {});
     } catch (e) {
-      setUpdateError(e?.message || 'Не удалось скачать обновление.');
+      const msg = String(e?.message || 'Не удалось скачать обновление.');
+      setUpdateError(msg.split('\n')[0].slice(0, 200));
     }
   }
 
@@ -133,7 +135,8 @@ export default function SettingsPage() {
     try {
       await api.installUpdate();
     } catch (e) {
-      setUpdateError(e?.message || 'Не удалось установить обновление.');
+      const msg = String(e?.message || 'Не удалось установить обновление.');
+      setUpdateError(msg.split('\n')[0].slice(0, 200));
     }
   }
 
@@ -231,11 +234,13 @@ export default function SettingsPage() {
             <div style={{ color: '#97a7c3' }}>
               Текущая версия: {updateStatus.version || '—'} {updateStatus.latestVersion ? `• Доступна: ${updateStatus.latestVersion}` : ''}
             </div>
-            <div style={{ color: '#97a7c3', marginTop: 4 }}>{updateStatus.message || 'Нажмите “Проверить обновления”.'}</div>
+            <div style={{ color: '#97a7c3', marginTop: 4, maxWidth: 480, whiteSpace: 'pre-line' }}>
+              {updateStatus.message || 'Нажмите “Проверить обновления”.'}
+            </div>
             {updateStatus.downloading && (
               <div style={{ color: '#73e7d5', marginTop: 4 }}>Скачивание: {Math.round(updateStatus.progressPercent || 0)}%</div>
             )}
-            {!!updateError && <div className="dashboard-signing-error" style={{ marginTop: 6 }}>{updateError}</div>}
+            {!!updateError && <div className="dashboard-signing-error" style={{ marginTop: 6, maxWidth: 480 }}>{updateError}</div>}
           </div>
           <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
             <button type="button" onClick={checkUpdates} disabled={updateStatus.checking || updateStatus.downloading}>
