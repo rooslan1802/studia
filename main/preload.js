@@ -67,6 +67,16 @@ contextBridge.exposeInMainWorld('api', {
   clearAuditLogs: () => ipcRenderer.invoke('audit:clear'),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (payload) => ipcRenderer.invoke('settings:save', payload),
+  getUpdateStatus: () => ipcRenderer.invoke('app:updates:status'),
+  checkForUpdates: () => ipcRenderer.invoke('app:updates:check'),
+  downloadUpdate: () => ipcRenderer.invoke('app:updates:download'),
+  installUpdate: () => ipcRenderer.invoke('app:updates:install'),
+  onUpdateState: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_, payload) => callback(payload || {});
+    ipcRenderer.on('app:update-state', listener);
+    return () => ipcRenderer.removeListener('app:update-state', listener);
+  },
 
   getWhatsAppSettings: () => ipcRenderer.invoke('whatsapp:settings-get'),
   saveWhatsAppSettings: (payload) => ipcRenderer.invoke('whatsapp:settings-save', payload),

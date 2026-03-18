@@ -22,6 +22,17 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
+  const [updateStatus, setUpdateStatus] = useState({
+    checking: false,
+    available: false,
+    downloaded: false,
+    downloading: false,
+    version: '',
+    latestVersion: '',
+    progressPercent: 0,
+    message: ''
+  });
+  const [updateError, setUpdateError] = useState('');
 
   async function load() {
     setLoading(true);
@@ -40,6 +51,14 @@ export default function SettingsPage() {
   useEffect(() => {
     load();
     return undefined;
+  }, []);
+
+  useEffect(() => {
+    api.getUpdateStatus().then((state) => setUpdateStatus(state || {})).catch(() => {});
+    const off = api.onUpdateState((state) => setUpdateStatus(state || {}));
+    return () => {
+      if (typeof off === 'function') off();
+    };
   }, []);
 
   function updatePayments(key, value) {
@@ -89,10 +108,39 @@ export default function SettingsPage() {
     }
   }
 
+  async function checkUpdates() {
+    setUpdateError('');
+    try {
+      const state = await api.checkForUpdates();
+      setUpdateStatus(state || {});
+    } catch (e) {
+      setUpdateError(e?.message || 'Не удалось проверить обновления.');
+    }
+  }
+
+  async function downloadUpdate() {
+    setUpdateError('');
+    try {
+      const state = await api.downloadUpdate();
+      setUpdateStatus(state || {});
+    } catch (e) {
+      setUpdateError(e?.message || 'Не удалось скачать обновление.');
+    }
+  }
+
+  async function installUpdate() {
+    setUpdateError('');
+    try {
+      await api.installUpdate();
+    } catch (e) {
+      setUpdateError(e?.message || 'Не удалось установить обновление.');
+    }
+  }
+
   return (
     <section>
       <h1 className="page-title">Настройки</h1>
-      <p className="page-subtitle">Глобальные циклы оплат и отдельные правила для нужных кружков.</p>
+      <p className="page-subtitle">Глобальные циклы оплат и обновления приложения.</p>
 
       <div className="panel">
         {loading ? (
@@ -174,6 +222,42 @@ export default function SettingsPage() {
             {!!info && <div style={{ color: '#73e7d5', marginTop: 12 }}>{info}</div>}
           </>
         )}
+      </div>
+
+      <div className="panel" style={{ marginTop: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <div>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>Обновления приложения</div>
+            <div style={{ color: '#97a7c3' }}>
+              Текущая версия: {updateStatus.version || '—'} {updateStatus.latestVersion ? `• Доступна: ${updateStatus.latestVersion}` : ''}
+            </div>
+            <div style={{ color: '#97a7c3', marginTop: 4 }}>{updateStatus.message || 'Нажмите “Проверить обновления”.'}</div>
+            {updateStatus.downloading && (
+              <div style={{ color: '#73e7d5', marginTop: 4 }}>Скачивание: {Math.round(updateStatus.progressPercent || 0)}%</div>
+            )}
+            {!!updateError && <div className="dashboard-signing-error" style={{ marginTop: 6 }}>{updateError}</div>}
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+            <button type="button" onClick={checkUpdates} disabled={updateStatus.checking || updateStatus.downloading}>
+              {updateStatus.checking ? 'Проверяем...' : 'Проверить обновления'}
+            </button>
+            <button
+              type="button"
+              onClick={downloadUpdate}
+              disabled={!updateStatus.available || updateStatus.downloading || updateStatus.downloaded}
+            >
+              {updateStatus.downloading ? 'Скачиваем...' : 'Скачать'}
+            </button>
+            <button
+              type="button"
+              className="primary"
+              onClick={installUpdate}
+              disabled={!updateStatus.downloaded}
+            >
+              Установить
+            </button>
+          </div>
+        </div>
       </div>
     </section>
   );
