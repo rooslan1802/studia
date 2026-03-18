@@ -1728,7 +1728,7 @@ export default function ChildrenPage() {
                 <th><button type="button" className="th-sort-btn" onClick={() => toggleChildrenSort('childAge')}>Возраст {renderSortArrow(childrenSort, 'childAge')}</button></th>
                 <th><button type="button" className="th-sort-btn" onClick={() => toggleChildrenSort('courseName')}>Кружок {renderSortArrow(childrenSort, 'courseName')}</button></th>
                 <th><button type="button" className="th-sort-btn" onClick={() => toggleChildrenSort('groupName')}>Группа {renderSortArrow(childrenSort, 'groupName')}</button></th>
-                {activeList === 'paid' && <th><button type="button" className="th-sort-btn" onClick={() => toggleChildrenSort('lastPaymentDate')}>Дата последней оплаты {renderSortArrow(childrenSort, 'lastPaymentDate')}</button></th>}
+                {activeList === 'paid' && <th><button type="button" className="th-sort-btn" onClick={() => toggleChildrenSort('messageTag')}>Пометка {renderSortArrow(childrenSort, 'messageTag')}</button></th>}
                 <th><button type="button" className="th-sort-btn" onClick={() => toggleChildrenSort('parentPhone')}>Номер телефона {renderSortArrow(childrenSort, 'parentPhone')}</button></th>
                 {activeList === 'voucher' && <th><button type="button" className="th-sort-btn" onClick={() => toggleChildrenSort('messageTag')}>Пометка {renderSortArrow(childrenSort, 'messageTag')}</button></th>}
                 <th></th>
@@ -1760,7 +1760,11 @@ export default function ChildrenPage() {
                   <td>{row.childAge}</td>
                   <td>{row.courseName}</td>
                   <td>{row.groupName || '—'}</td>
-                  {activeList === 'paid' && <td>{row.lastPaymentDate || '—'}</td>}
+                  {activeList === 'paid' && (
+                    <td>
+                      {row.messageTag ? <span className={`tag-chip ${row.messageTag}`}>{messageTagLabel(row.messageTag)}</span> : '—'}
+                    </td>
+                  )}
                   <td>{row.parentPhone}</td>
                   {activeList === 'voucher' && (
                     <td>
@@ -1827,7 +1831,7 @@ export default function ChildrenPage() {
             {selectedChild.type === 'paid' && (
               <div className="child-sheet-grid" style={{ marginTop: 10 }}>
                 <div className="child-sheet-row"><span>Старт оплаты</span><b>{selectedChild.profile?.paymentStartDate || '—'}</b></div>
-                <div className="child-sheet-row"><span>Последняя оплата</span><b>{selectedChild.profile?.lastPaymentDate || '—'}</b></div>
+                <div className="child-sheet-row"><span>Пометка</span><b>{messageTagLabel(selectedChild.messageTag)}</b></div>
                 <div className="child-sheet-row"><span>Уроков после оплаты</span><b>{selectedChild.profile?.lessonsCount ?? '—'}</b></div>
                 <div className="child-sheet-row"><span>Текущий цикл</span><b>{selectedChild.profile?.lessonsCount ?? 0}/{selectedChild.profile?.cycleLength || selectedChild._meta?.cycleLength || 8}</b></div>
               </div>
