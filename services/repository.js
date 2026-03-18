@@ -1747,7 +1747,7 @@ function saveChild(payload) {
   validateChildPayload(payload);
   const db = getDb();
   const profile = payload.profile || {};
-  const messageTag = payload.type === 'voucher' ? normalizeMessageTag(payload.messageTag) : '';
+  const messageTag = payload.type === 'queue' ? '' : normalizeMessageTag(payload.messageTag);
 
   const txn = db.transaction(() => {
     let childId = payload.id;
@@ -2012,7 +2012,7 @@ function setChildrenMessageTag(payload = {}) {
   const result = db.prepare(`
     UPDATE Children
     SET messageTag = ?
-    WHERE type = 'voucher' AND id IN (${ids.map(() => '?').join(',')})
+    WHERE type IN ('voucher', 'paid') AND id IN (${ids.map(() => '?').join(',')})
   `).run(tag, ...ids);
 
   addAuditLog({

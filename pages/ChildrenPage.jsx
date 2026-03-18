@@ -1484,7 +1484,7 @@ export default function ChildrenPage() {
                 <button type="button" className="danger" onClick={deleteSelectedRows} disabled={!selectedRows.length}>
                   Удалить
                 </button>
-                {activeList === 'voucher' && (
+                {(activeList === 'voucher' || activeList === 'paid') && (
                   <>
                     <select value={selectedCourseForBulk} onChange={(e) => setSelectedCourseForBulk(e.target.value)}>
                       <option value="">Кружок</option>
