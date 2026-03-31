@@ -1,6 +1,7 @@
 const { ipcMain, dialog, BrowserWindow, app } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
+const XLSX = require('xlsx');
 const { getDb, getDbPath, closeDatabase } = require('../database');
 const repository = require('./repository');
 const {
@@ -530,6 +531,244 @@ function registerIpcHandlers() {
   ipcMain.handle('attendance:sheet-save', async (_, payload) => repository.saveAttendanceSheet(payload));
   ipcMain.handle('attendance:list', async (_, filters) => repository.listAttendanceSessions(filters));
   ipcMain.handle('attendance:boards', async (_, filters) => repository.listAttendanceBoards(filters || {}));
+  ipcMain.handle('attendance:export-excel', async (_, payload = {}) => {
+    try {
+      const courseIds = Array.isArray(payload.courseIds)
+        ? payload.courseIds.map((id) => Number(id)).filter(Boolean)
+        : [];
+      const cityId = payload.cityId ? Number(payload.cityId) : null;
+
+      const normalizeDate = (value) => {
+        const d = new Date(value);
+        if (Number.isNaN(d.getTime())) return null;
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${y}-${m}-${day}`;
+      };
+
+      const today = new Date();
+      const defaultFrom = normalizeDate(new Date(today.getFullYear(), today.getMonth(), 1));
+      const defaultTo = normalizeDate(today);
+      let dateFrom = normalizeDate(payload.dateFrom) || defaultFrom;
+      let dateTo = normalizeDate(payload.dateTo) || defaultTo;
+      if (dateFrom > dateTo) [dateFrom, dateTo] = [dateTo, dateFrom];
+
+      const exportData = repository.getAttendanceExportData({
+        dateFrom,
+        dateTo,
+        courseIds,
+        cityId
+      });
+      if (!exportData.length) {
+        return { success: false, message: 'Нет групп для выбранных фильтров.' };
+      }
+
+      const wb = XLSX.utils.book_new();
+      const markView = { present: '✓', 'absent-other': '✕', sick: 'Б', 'absent-valid': 'Б' };
+
+      const byCourse = new Map();
+      exportData.forEach((g) => {
+        if (!byCourse.has(g.courseId)) byCourse.set(g.courseId, []);
+        byCourse.get(g.courseId).push(g);
+      });
+
+      const usedSheetNames = new Set();
+      const makeSheetName = (raw) => {
+        const base = String(raw || 'Sheet').replace(/[\\/?*[\]:]/g, '').trim() || 'Sheet';
+        const maxLen = 31;
+        let name = base.slice(0, maxLen);
+        let idx = 2;
+        while (usedSheetNames.has(name)) {
+          const suffix = ` (${idx})`;
+          name = `${base}`.slice(0, maxLen - suffix.length) + suffix;
+          idx += 1;
+        }
+        usedSheetNames.add(name);
+        return name;
+      };
+
+      const titleStyle = {
+        font: { bold: true, sz: 14, color: { rgb: 'FFFFFFFF' } },
+        alignment: { horizontal: 'center', vertical: 'center' },
+        fill: { fgColor: { rgb: 'FF102542' } }
+      };
+      const subtitleStyle = {
+        font: { sz: 11, color: { rgb: 'FF1F2937' } },
+        alignment: { horizontal: 'center', vertical: 'center' },
+        fill: { fgColor: { rgb: 'FFE5ECF6' } }
+      };
+      const headerStyle = {
+        font: { bold: true, color: { rgb: 'FF102542' } },
+        alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+        fill: { fgColor: { rgb: 'FFD5E3FF' } },
+        border: {
+          top: { style: 'thin', color: { rgb: 'FFB4C5E4' } },
+          bottom: { style: 'thin', color: { rgb: 'FFB4C5E4' } },
+          left: { style: 'thin', color: { rgb: 'FFB4C5E4' } },
+          right: { style: 'thin', color: { rgb: 'FFB4C5E4' } }
+        }
+      };
+      const cellStyle = {
+        alignment: { horizontal: 'center', vertical: 'center' },
+        border: {
+          top: { style: 'thin', color: { rgb: 'FFE0E7F3' } },
+          bottom: { style: 'thin', color: { rgb: 'FFE0E7F3' } },
+          left: { style: 'thin', color: { rgb: 'FFE0E7F3' } },
+          right: { style: 'thin', color: { rgb: 'FFE0E7F3' } }
+        }
+      };
+
+      const setStyle = (ws, r, c, style) => {
+        const cellRef = XLSX.utils.encode_cell({ r, c });
+        if (!ws[cellRef]) return;
+        ws[cellRef].s = { ...(ws[cellRef].s || {}), ...style };
+      };
+
+      const singleCourse = courseIds.length === 1;
+
+      byCourse.forEach((groups, courseIdKey) => {
+        if (singleCourse) {
+          // Старое поведение: каждая группа — отдельный лист
+          groups.forEach((group) => {
+            const dates = group.sheet.dates.map((d) => d.date).sort();
+            const humanDates = dates.map((d) =>
+              new Date(`${d}T00:00:00`).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })
+            );
+            const header = ['№', 'ФИО', ...humanDates, 'Присутствий', 'Отсутствий'];
+            const rows = group.sheet.children.map((child, idx) => {
+              let present = 0;
+              let absent = 0;
+              const cells = dates.map((d) => {
+                const status = child.marks?.[d] || '';
+                if (status === 'present') present += 1;
+                else if (status === 'absent-other' || status === 'sick' || status === 'absent-valid') absent += 1;
+                return markView[status] || '';
+              });
+              return [idx + 1, child.childName || '', ...cells, present, absent];
+            });
+
+            const aoa = [
+              [`${group.cityName || ''} / ${group.studioName || ''} / ${group.courseName || ''} / ${group.groupName || ''}`],
+              [`Период: ${dateFrom} — ${dateTo}`],
+              [],
+              header,
+              ...rows
+            ];
+
+            const ws = XLSX.utils.aoa_to_sheet(aoa);
+            const colsCount = header.length;
+            const lastCol = colsCount - 1;
+            ws['!merges'] = [
+              { s: { r: 0, c: 0 }, e: { r: 0, c: lastCol } },
+              { s: { r: 1, c: 0 }, e: { r: 1, c: lastCol } }
+            ];
+
+            setStyle(ws, 0, 0, titleStyle);
+            setStyle(ws, 1, 0, subtitleStyle);
+            for (let c = 0; c < colsCount; c += 1) setStyle(ws, 3, c, headerStyle);
+            for (let r = 4; r < 4 + rows.length; r += 1) {
+              for (let c = 0; c < colsCount; c += 1) setStyle(ws, r, c, cellStyle);
+            }
+
+            ws['!cols'] = [
+              { wch: 4 },
+              { wch: 28 },
+              ...humanDates.map(() => ({ wch: 6 })),
+              { wch: 12 },
+              { wch: 12 }
+            ];
+            ws['!pane'] = { state: 'frozen', xSplit: 2, ySplit: 4, topLeftCell: 'C5', activePane: 'bottomRight' };
+            const sheetName = makeSheetName(group.groupName || group.courseName || 'Группа');
+            XLSX.utils.book_append_sheet(wb, ws, sheetName);
+          });
+          return;
+        }
+
+        // Многокружковый режим: один лист на кружок, внутри все группы
+        const courseName = groups[0]?.courseName || 'Кружок';
+        const allDates = Array.from(
+          new Set(
+            groups
+              .flatMap((g) => g.sheet.dates.map((d) => d.date))
+              .filter(Boolean)
+          )
+        ).sort();
+        const humanDates = allDates.map((d) =>
+          new Date(`${d}T00:00:00`).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })
+        );
+        const header = ['№', 'ФИО', ...humanDates, 'Присутствий', 'Отсутствий'];
+        const rows = [];
+
+        groups.forEach((group) => {
+          rows.push([`${group.studioName || ''} / ${group.groupName || ''}`]);
+          rows.push([]);
+          rows.push(header);
+          group.sheet.children.forEach((child, idx) => {
+            let present = 0;
+            let absent = 0;
+            const cells = allDates.map((d) => {
+              const status = child.marks?.[d] || '';
+              if (status === 'present') present += 1;
+              else if (status === 'absent-other' || status === 'sick' || status === 'absent-valid') absent += 1;
+              return markView[status] || '';
+            });
+            rows.push([idx + 1, child.childName || '', ...cells, present, absent]);
+          });
+          rows.push([]);
+        });
+
+        const aoa = [
+          [`${groups[0]?.cityName || ''} / ${courseName}`],
+          [`Период: ${dateFrom} — ${dateTo}`],
+          [],
+          ...rows
+        ];
+
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+        const colsCount = header.length;
+        const lastCol = colsCount - 1;
+        ws['!merges'] = [
+          { s: { r: 0, c: 0 }, e: { r: 0, c: lastCol } },
+          { s: { r: 1, c: 0 }, e: { r: 1, c: lastCol } }
+        ];
+
+        setStyle(ws, 0, 0, titleStyle);
+        setStyle(ws, 1, 0, subtitleStyle);
+        for (let r = 0; r < aoa.length; r += 1) {
+          const row = aoa[r];
+          if (row?.length === header.length && row[0] === header[0] && row[1] === header[1]) {
+            for (let c = 0; c < colsCount; c += 1) setStyle(ws, r, c, headerStyle);
+          } else if (r >= 4) {
+            for (let c = 0; c < colsCount; c += 1) setStyle(ws, r, c, cellStyle);
+          }
+        }
+
+        ws['!cols'] = [
+          { wch: 4 },
+          { wch: 32 },
+          ...humanDates.map(() => ({ wch: 6 })),
+          { wch: 12 },
+          { wch: 12 }
+        ];
+        ws['!pane'] = { state: 'frozen', xSplit: 2, ySplit: 4, topLeftCell: 'C5', activePane: 'bottomRight' };
+        const sheetName = makeSheetName(courseName || 'Кружок');
+        XLSX.utils.book_append_sheet(wb, ws, sheetName);
+      });
+
+      const defaultName = `Табели_${sanitizeFileName(dateFrom)}_${sanitizeFileName(dateTo)}.xlsx`;
+      const { canceled, filePath } = await dialog.showSaveDialog({
+        defaultPath: path.join(app.getPath('documents'), defaultName),
+        filters: [{ name: 'Excel', extensions: ['xlsx'] }]
+      });
+      if (canceled || !filePath) return { success: false, message: 'Сохранение отменено.' };
+
+      XLSX.writeFile(wb, filePath);
+      return { success: true, filePath, groups: exportData.length };
+    } catch (error) {
+      return { success: false, message: error?.message || 'Не удалось экспортировать табели.' };
+    }
+  });
   ipcMain.handle('attendance:add-date', async (_, payload) => repository.addAttendanceDate(payload));
   ipcMain.handle('attendance:remove-date', async (_, payload) => repository.removeAttendanceDate(payload));
 
@@ -600,7 +839,9 @@ function registerIpcHandlers() {
         cityId: Number(payload.cityId || 0),
         studioId: Number(payload.studioId || 0),
         fetched: Number(payload.fetched || 0),
-        items: Array.isArray(payload.items) ? payload.items : []
+        items: Array.isArray(payload.items) ? payload.items : [],
+        updateExisting: true,
+        forceInsertDuplicates: true
       });
       return { success: true, ...imported };
     } catch (error) {
@@ -639,7 +880,10 @@ function registerIpcHandlers() {
         cityId: Number(payload.cityId || 0),
         studioId: Number(payload.studioId || 0),
         fetched: Number(payload.fetched || 0),
-        items: Array.isArray(payload.items) ? payload.items : []
+        items: Array.isArray(payload.items) ? payload.items : [],
+        updateExisting: true,
+        forceInsertDuplicates: true,
+        messageTag: String(payload.messageTag || '').trim()
       });
       return { success: true, ...imported };
     } catch (error) {
@@ -678,13 +922,28 @@ function registerIpcHandlers() {
         cityId: Number(payload.cityId || 0),
         studioId: Number(payload.studioId || 0),
         fetched: Number(payload.fetched || 0),
-        items: Array.isArray(payload.items) ? payload.items : []
+        items: Array.isArray(payload.items) ? payload.items : [],
+        updateExisting: true,
+        forceInsertDuplicates: true,
+        messageTag: String(payload.messageTag || '').trim()
       });
       return { success: true, ...imported };
     } catch (error) {
       return {
         success: false,
         message: error?.message || 'Не удалось синхронизировать детей из Artsport.'
+      };
+    }
+  });
+
+  ipcMain.handle('import:match-existing', async (_, payload = {}) => {
+    try {
+      const result = repository.matchExternalVouchers(payload, {});
+      return { success: true, ...result };
+    } catch (error) {
+      return {
+        success: false,
+        message: error?.message || 'Не удалось определить существующих детей.'
       };
     }
   });

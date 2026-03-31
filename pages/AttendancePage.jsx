@@ -110,11 +110,18 @@ export default function AttendancePage() {
   const [marks, setMarks] = useState({});
   const [dateEditorOpen, setDateEditorOpen] = useState(false);
   const [error, setError] = useState('');
+  const [exportNotice, setExportNotice] = useState('');
   const [saving, setSaving] = useState(false);
   const [selectedChild, setSelectedChild] = useState(null);
   const [transferModalData, setTransferModalData] = useState(null);
   const [transferGroupsList, setTransferGroupsList] = useState([]);
   const [transferSaving, setTransferSaving] = useState(false);
+  const [exportModalOpen, setExportModalOpen] = useState(false);
+  const [exportDateFrom, setExportDateFrom] = useState(() => monthStartIso());
+  const [exportDateTo, setExportDateTo] = useState(() => monthEndIso());
+  const [exportCourses, setExportCourses] = useState([]);
+  const [exporting, setExporting] = useState(false);
+  const [exportSelectAllCourses, setExportSelectAllCourses] = useState(false);
 
   async function loadMeta() {
     const [cityList, studioList, courseList] = await Promise.all([api.listCities(), api.listStudios(), api.listCourses()]);
@@ -158,6 +165,17 @@ export default function AttendancePage() {
   useEffect(() => {
     loadMeta();
   }, []);
+
+  useEffect(() => {
+    setExportDateFrom(dateFrom);
+    setExportDateTo(dateTo);
+  }, [dateFrom, dateTo]);
+
+  useEffect(() => {
+    if (exportSelectAllCourses) {
+      setExportCourses(courses.map((c) => String(c.id)));
+    }
+  }, [exportSelectAllCourses, courses]);
 
   useEffect(() => {
     if (!cityId) return;
@@ -220,6 +238,12 @@ export default function AttendancePage() {
   );
   const transferGroups = useMemo(() => transferGroupsList, [transferGroupsList]);
 
+  useEffect(() => {
+    if (exportSelectAllCourses) {
+      setExportCourses(filteredCourses.map((c) => String(c.id)));
+    }
+  }, [exportSelectAllCourses, filteredCourses]);
+
   async function saveSingleDate(date, nextState, nextMarks) {
     if (!groupId) return;
     const sState = nextState[date] || '';
@@ -247,6 +271,43 @@ export default function AttendancePage() {
       setError(e?.message || 'Не удалось сохранить отметки.');
     } finally {
       setSaving(false);
+    }
+  }
+
+  function toggleExportCourse(courseId, checked) {
+    setExportCourses((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(String(courseId));
+      else next.delete(String(courseId));
+      return Array.from(next);
+    });
+    setExportSelectAllCourses(false);
+  }
+
+  async function exportAttendanceExcel() {
+    setExportNotice('');
+    setError('');
+    setExporting(true);
+    try {
+      const coursesForExport = exportSelectAllCourses ? courses : filteredCourses;
+      const response = await api.exportAttendanceExcel({
+        dateFrom: exportDateFrom,
+        dateTo: exportDateTo,
+        courseIds: exportSelectAllCourses
+          ? coursesForExport.map((c) => c.id)
+          : exportCourses.map((id) => Number(id)).filter(Boolean),
+        cityId: cityId || undefined
+      });
+      if (!response?.success) {
+        setError(response?.message || 'Не удалось экспортировать табели.');
+        return;
+      }
+      setExportModalOpen(false);
+      setExportNotice(`Экспорт сохранен: ${response.filePath}`);
+    } catch (e) {
+      setError(e?.message || 'Не удалось экспортировать табели.');
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -390,6 +451,7 @@ export default function AttendancePage() {
       <h1 className="page-title">Мои табели</h1>
       <p className="page-subtitle">Обычные табели по группам.</p>
       {error && <p style={{ color: '#ff6978' }}>{error}</p>}
+      {exportNotice && <p style={{ color: '#6be28c' }}>{exportNotice}</p>}
 
       <>
           <div className="toolbar">
@@ -406,6 +468,18 @@ export default function AttendancePage() {
             <button onClick={() => setMonthOffset((v) => v - 1)}>←</button>
             <div className="month-chip">{monthLabel(dateFrom)}</div>
             <button onClick={() => setMonthOffset((v) => v + 1)}>→</button>
+            <button
+              onClick={() => {
+                setExportModalOpen(true);
+                setExportNotice('');
+                setExportCourses((prev) => (prev.length ? prev : (courseId ? [courseId] : [])));
+                setExportDateFrom(dateFrom);
+                setExportDateTo(dateTo);
+                setExportSelectAllCourses(false);
+              }}
+            >
+              Экспорт в Excel
+            </button>
 
             {view === 'sheet' && (
               <>
@@ -554,6 +628,54 @@ export default function AttendancePage() {
           <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 12 }}>
             <button className="muted" onClick={clearAllDatesInMonth}>Очистить все даты месяца</button>
             <button className="primary" onClick={() => setDateEditorOpen(false)}>Готово</button>
+          </div>
+        </Modal>
+      )}
+
+      {exportModalOpen && (
+        <Modal title="Экспорт табелей в Excel" onClose={() => !exporting && setExportModalOpen(false)}>
+          <div className="form-grid">
+            <label>
+              Период с
+              <input type="date" value={exportDateFrom} onChange={(e) => setExportDateFrom(e.target.value)} />
+            </label>
+            <label>
+              Период до
+              <input type="date" value={exportDateTo} onChange={(e) => setExportDateTo(e.target.value)} />
+            </label>
+            <div className="full">
+              <div className="damubala-label" style={{ marginBottom: 6 }}>Кружки (если не выбрано — все по городу)</div>
+              <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={exportSelectAllCourses}
+                  onChange={(e) => {
+                    setExportSelectAllCourses(e.target.checked);
+                    if (e.target.checked) setExportCourses(filteredCourses.map((c) => String(c.id)));
+                  }}
+                />
+                <span>Выбрать все кружки</span>
+              </label>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 6 }}>
+                {filteredCourses.map((course) => (
+                  <label key={course.id} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <input
+                      type="checkbox"
+                      checked={exportCourses.includes(String(course.id))}
+                      onChange={(e) => toggleExportCourse(course.id, e.target.checked)}
+                    />
+                    <span>{course.name}</span>
+                  </label>
+                ))}
+                {!filteredCourses.length && <div style={{ color: '#8ba3c4' }}>Нет кружков для выбранного города</div>}
+              </div>
+            </div>
+            <div className="full" style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+              <button type="button" className="muted" onClick={() => setExportModalOpen(false)} disabled={exporting}>Отмена</button>
+              <button type="button" className="primary" onClick={exportAttendanceExcel} disabled={exporting}>
+                {exporting ? 'Экспорт...' : 'Сохранить .xlsx'}
+              </button>
+            </div>
           </div>
         </Modal>
       )}

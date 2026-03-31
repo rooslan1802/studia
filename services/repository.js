@@ -608,6 +608,28 @@ function listGroupSchedule(groupId) {
   return getDb().prepare('SELECT id, groupId, weekday, startTime, endTime FROM GroupSchedule WHERE groupId = ? ORDER BY weekday').all(groupId);
 }
 
+function getAttendanceDateRange() {
+  const db = getDb();
+  const row = db
+    .prepare(
+      `
+      SELECT
+        MIN(dateVal) AS minDate,
+        MAX(dateVal) AS maxDate
+      FROM (
+        SELECT MIN(sessionDate) AS dateVal FROM AttendanceSessions
+        UNION ALL
+        SELECT MIN(sessionDate) AS dateVal FROM AttendancePlannedDates
+      )
+      `
+    )
+    .get();
+  return {
+    minDate: row?.minDate || null,
+    maxDate: row?.maxDate || null
+  };
+}
+
 function monthStartFromIso(isoDate) {
   const [y, m] = String(isoDate).slice(0, 7).split('-').map(Number);
   return `${y}-${String(m).padStart(2, '0')}-01`;
@@ -1744,7 +1766,9 @@ async function refreshQueueChildren(payload = {}) {
 }
 
 function saveChild(payload) {
-  validateChildPayload(payload);
+  if (!payload.skipValidation) {
+    validateChildPayload(payload);
+  }
   const db = getDb();
   const profile = payload.profile || {};
   const messageTag = payload.type === 'queue' ? '' : normalizeMessageTag(payload.messageTag);
@@ -1815,7 +1839,22 @@ function saveChild(payload) {
       childId = result.lastInsertRowid;
     }
 
-    const ageFields = computeAgeForProfile(profile, previousProfile);
+    let ageFields;
+    try {
+      ageFields = computeAgeForProfile(profile, previousProfile);
+    } catch (err) {
+      if (payload.skipValidation) {
+        const today = toIsoDate(new Date());
+        ageFields = {
+          childBirthDate: profile.childBirthDate || today,
+          childAge: 0,
+          manualAge: null,
+          manualAgeSetDate: null
+        };
+      } else {
+        throw err;
+      }
+    }
 
     if (payload.type === 'voucher') {
       const importSource = String(profile.importSource || previousProfile?.importSource || '').trim().toLowerCase();
@@ -2063,11 +2102,104 @@ function setChildrenCourse(payload = {}) {
   return { success: true, updated: Number(result.changes || 0) };
 }
 
+function matchExternalVouchers(payload = {}, options = {}) {
+  const rows = Array.isArray(payload.items) ? payload.items : [];
+  const db = getDb();
+  const fallbackStudioId = Number(payload.studioId || 0);
+  const fallbackCityId = Number(payload.cityId || 0);
+
+  const findCityByName = db.prepare('SELECT id, name FROM Cities WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) LIMIT 1');
+  const findStudioByName = db.prepare(
+    'SELECT id, cityId, name FROM Studios WHERE cityId = ? AND LOWER(TRIM(name)) = LOWER(TRIM(?)) LIMIT 1'
+  );
+
+  function resolveCity(cityNameRaw) {
+    if (fallbackCityId) {
+      const city = db.prepare('SELECT id, name FROM Cities WHERE id = ?').get(fallbackCityId);
+      if (city) return city;
+    }
+    const cityName = String(cityNameRaw || '').trim();
+    if (!cityName) return null;
+    return findCityByName.get(cityName);
+  }
+
+  function resolveStudio(city, studioNameRaw) {
+    if (!city) return null;
+    if (fallbackStudioId) {
+      const studio = db.prepare('SELECT id, cityId, name FROM Studios WHERE id = ?').get(fallbackStudioId);
+      if (studio) return studio;
+    }
+    const studioName = String(studioNameRaw || '').trim();
+    if (!studioName) return null;
+    return findStudioByName.get(city.id, studioName);
+  }
+
+  const findByIin = db.prepare(`
+    SELECT ch.id, ch.messageTag, ch.childFullName, st.name as studioName, co.name as courseName
+    FROM Children ch
+    JOIN VoucherProfile vp ON vp.childId = ch.id
+    LEFT JOIN Studios st ON st.id = ch.studioId
+    LEFT JOIN Courses co ON co.id = ch.courseId
+    WHERE ch.type = 'voucher'
+      AND ch.studioId = ?
+      AND vp.childIIN = ?
+    ORDER BY ch.id
+    LIMIT 1
+  `);
+  const findByName = db.prepare(`
+    SELECT ch.id, ch.messageTag, ch.childFullName, st.name as studioName, co.name as courseName
+    FROM Children ch
+    JOIN VoucherProfile vp ON vp.childId = ch.id
+    LEFT JOIN Studios st ON st.id = ch.studioId
+    LEFT JOIN Courses co ON co.id = ch.courseId
+    WHERE ch.type = 'voucher'
+      AND ch.studioId = ?
+      AND LOWER(TRIM(vp.childFullName)) = LOWER(TRIM(?))
+    ORDER BY ch.id
+    LIMIT 1
+  `);
+
+  const result = { success: true, total: rows.length, matches: [], matchesCount: 0 };
+
+  rows.forEach((raw) => {
+    try {
+      const rawChildName = String(raw?.childFullName || raw?.childName || '').replace(/\s+/g, ' ').trim();
+      const childFullName = rawChildName || String(raw?.parentFullName || voucherPrefix || 'Новый ребенок').trim();
+      const childIINRaw = cleanDigits(raw?.childIIN || '');
+      const childIIN = validateIin(childIINRaw) ? childIINRaw : '000000000000';
+      const parentPhone = String(raw?.parentPhone || '').trim();
+      const parentIIN = cleanDigits(raw?.parentIIN || '');
+      const city = resolveCity(raw?.cityName || raw?.regionName);
+      const studio = resolveStudio(city, raw?.studioName || raw?.organizationName);
+      if (!studio) return;
+      let existing = null;
+      if (childIIN) existing = findByIin.get(studio.id, childIIN);
+      if (!existing) existing = findByName.get(studio.id, childFullName);
+      if (existing) {
+        result.matchesCount += 1;
+        if (result.matches.length < 100) {
+          result.matches.push({
+            id: existing.id,
+            childFullName: childFullName || existing.childFullName || '',
+            studioName: existing.studioName || studio.name || '',
+            courseName: existing.courseName || ''
+          });
+        }
+      }
+    } catch {
+      // ignore preview errors
+    }
+  });
+
+  return result;
+}
+
 function importExternalVouchers(payload = {}, options = {}) {
   const rows = Array.isArray(payload.items) ? payload.items : [];
   const db = getDb();
   const fallbackStudioId = Number(payload.studioId || 0);
   const fallbackCityId = Number(payload.cityId || 0);
+  const importMessageTag = String(payload.messageTag || '').trim();
   const sourceName = String(options.sourceName || 'External').trim() || 'External';
   const voucherPrefix = String(options.voucherPrefix || sourceName).trim().toUpperCase() || 'EXTERNAL';
   const importSource = String(options.importSource || '').trim().toLowerCase();
@@ -2123,7 +2255,6 @@ function importExternalVouchers(payload = {}, options = {}) {
     JOIN VoucherProfile vp ON vp.childId = ch.id
     WHERE ch.type = 'voucher'
       AND ch.studioId = ?
-      AND vp.parentIIN = ?
       AND vp.childIIN = ?
     ORDER BY ch.id
     LIMIT 1
@@ -2134,7 +2265,6 @@ function importExternalVouchers(payload = {}, options = {}) {
     JOIN VoucherProfile vp ON vp.childId = ch.id
     WHERE ch.type = 'voucher'
       AND ch.studioId = ?
-      AND vp.parentIIN = ?
       AND LOWER(TRIM(vp.childFullName)) = LOWER(TRIM(?))
     ORDER BY ch.id
     LIMIT 1
@@ -2147,20 +2277,62 @@ function importExternalVouchers(payload = {}, options = {}) {
     added: 0,
     updated: 0,
     skipped: 0,
+    duplicatesAdded: 0,
     newChildren: [],
+    updatedChildren: [],
+    duplicateChildren: [],
+    importedVerbose: [],
+    skippedVerbose: [],
     courseId: null,
     courseName: '',
     errors: []
   };
 
+  const updateExisting = !!payload.updateExisting;
+  const forceInsertDuplicates = !!payload.forceInsertDuplicates;
+  const parentCount = new Map();
+
+  function isOrgName(name) {
+    const n = String(name || '').trim().toLowerCase();
+    return n.startsWith('ип ') || n.startsWith('too ') || n.startsWith('тоо ') || n.startsWith('тoo ') || n.startsWith('т/о');
+  }
+
+  function resolveChildName(raw, index) {
+    const trim = (v) => String(v || '').replace(/\s+/g, ' ').trim();
+    const studio = trim(raw?.studioName || raw?.organizationName);
+    const course = trim(raw?.courseName || raw?.applicationName || raw?.course);
+
+    const variants = [
+      raw?.childFullName,
+      raw?.childName,
+      raw?.child_full_name,
+      raw?.Fio,
+      raw?.fio,
+      [raw?.childLastName, raw?.childFirstName, raw?.childMiddleName].filter(Boolean).join(' '),
+      raw?.childFirstName
+    ]
+      .map(trim)
+      .filter((v) => v && !isOrgName(v) && v !== studio && v !== course);
+
+    if (variants.length) return variants[0];
+
+    const childIIN = cleanDigits(raw?.childIIN || '');
+    const parentIIN = cleanDigits(raw?.parentIIN || '');
+    if (childIIN) return `Ребенок ${childIIN}`;
+    if (parentIIN) return `Ребенок ${parentIIN}`;
+    return `Ребенок #${index + 1}`;
+  }
+
   rows.forEach((raw, index) => {
     try {
-      const childFullName = String(raw?.childFullName || '').replace(/\s+/g, ' ').trim();
+      const childFullName = resolveChildName(raw, index);
       const childIINRaw = cleanDigits(raw?.childIIN || '');
       const childIIN = validateIin(childIINRaw) ? childIINRaw : '';
       const childBirthDate = normalizeIsoDate(raw?.childBirthDate);
-      const parentPhone = String(raw?.parentPhone || '').trim();
-      const parentIIN = cleanDigits(raw?.parentIIN || '');
+      let parentPhone = String(raw?.parentPhone || '').trim();
+      if (!validatePhone(parentPhone)) parentPhone = '0000000000';
+      let parentIIN = cleanDigits(raw?.parentIIN || '');
+      if (!validateIin(parentIIN)) parentIIN = '000000000000';
       const parentFullName = String(raw?.parentFullName || '').replace(/\s+/g, ' ').trim();
       const parentEmail = String(raw?.parentEmail || '').trim();
       const voucherNumber = String(raw?.voucherNumber || voucherPrefix).trim() || voucherPrefix;
@@ -2170,48 +2342,77 @@ function importExternalVouchers(payload = {}, options = {}) {
       const studio = ensureStudio(city, raw?.studioName || raw?.organizationName);
       const course = ensureCourse(studio, raw?.courseName || raw?.applicationName);
 
-      if (!childFullName) throw new Error('Пустое ФИО ребенка');
-      if (!validatePhone(parentPhone)) throw new Error('Некорректный телефон родителя');
-      if (!validateIin(parentIIN)) throw new Error('Некорректный ИИН родителя');
+      if (parentIIN) {
+        parentCount.set(parentIIN, (parentCount.get(parentIIN) || 0) + 1);
+      }
+
+      // childFullName всегда заполнено resolveChildName
+      if (!validatePhone(parentPhone)) parentPhone = '';
+      if (!validateIin(parentIIN)) parentIIN = '';
 
       let existing = null;
       if (childIIN) {
-        existing = findByIin.get(studio.id, parentIIN, childIIN);
+        existing = findByIin.get(studio.id, childIIN);
       }
       if (!existing) {
-        existing = findByName.get(studio.id, parentIIN, childFullName);
+        existing = findByName.get(studio.id, childFullName);
       }
 
-      saveChild({
-        id: existing?.id || undefined,
-        studioId: studio.id,
-        courseId: course.id,
-        groupId: null,
-        type: 'voucher',
-        messageTag: existing?.messageTag || '',
-        profile: {
-          childFullName,
-          childIIN,
-          importSource,
-          childBirthDate,
-          manualAge: null,
-          parentPhone,
-          parentFullName: parentFullName || 'Не указано',
-          parentIIN,
-          parentEmail,
-          enrollmentDate,
-          voucherNumber,
-          voucherEndDate
-        }
-      });
+      const shouldUpdate = !existing || updateExisting;
+      if (shouldUpdate) {
+        saveChild({
+          id: existing?.id || undefined,
+          studioId: studio.id,
+          courseId: course.id,
+          groupId: null,
+          type: 'voucher',
+          messageTag: importMessageTag || existing?.messageTag || '',
+          profile: {
+            childFullName,
+            childIIN,
+            importSource,
+            childBirthDate,
+            manualAge: null,
+            parentPhone,
+            parentFullName: parentFullName || 'Не указано',
+            parentIIN,
+            parentEmail,
+            enrollmentDate,
+            voucherNumber,
+            voucherEndDate
+          },
+          skipValidation: true
+        });
+      }
+
+      const verbose = `${childFullName} • ИИН ребенка: ${childIIN || 'нет'} • ИИН родителя: ${parentIIN || 'нет'} • Тел: ${parentPhone || 'нет'} • Кружок: ${course.name || '—'} • Студия: ${studio.name || '—'} • Город: ${city.name || '—'}`;
 
       if (existing?.id) {
-        result.updated += 1;
-      } else {
+        if (shouldUpdate) {
+          result.updated += 1;
+          const nameForLog = childFullName || existing?.childFullName || voucherNumber || `ID ${existing?.id || ''}`;
+          if (result.updatedChildren.length < 200) {
+            result.updatedChildren.push(nameForLog);
+          }
+          if (result.importedVerbose.length < 500) result.importedVerbose.push(`UPDATE • ${verbose}`);
+        } else {
+          // всегда добавляем копию, даже если совпал
+          result.duplicatesAdded += 1;
+          existing = null;
+          const nameForLog = childFullName || voucherNumber || 'без имени';
+          if (result.duplicateChildren.length < 200) {
+            result.duplicateChildren.push(nameForLog);
+          }
+          if (result.importedVerbose.length < 500) result.importedVerbose.push(`DUPLICATE • ${verbose}`);
+        }
+      }
+
+      if (!existing) {
         result.added += 1;
         if (result.newChildren.length < 50) {
-          result.newChildren.push(childFullName);
+          result.newChildren.push(childFullName || voucherNumber || `#${index + 1}`);
         }
+        if (result.importedVerbose.length < 500) result.importedVerbose.push(`ADD • ${verbose}`);
       }
       if (!result.courseId) {
         result.courseId = course.id;
@@ -2219,9 +2420,13 @@ function importExternalVouchers(payload = {}, options = {}) {
       }
     } catch (error) {
       result.skipped += 1;
-      if (result.errors.length < 20) {
-        result.errors.push(`Строка ${index + 1}: ${error?.message || 'ошибка импорта'}`);
+      if (result.errors.length < 200) {
+        result.errors.push(
+          `Строка ${index + 1}: ${childFullName || 'без имени'} — ${error?.message || 'ошибка импорта'}`
+        );
       }
+      const errVerbose = `SKIP • ${error?.message || 'ошибка'} • child=${String(raw?.childFullName || raw?.childName || '').trim()} • parent=${raw?.parentFullName || ''} • childIIN=${raw?.childIIN || ''} • parentIIN=${raw?.parentIIN || ''}`;
+      if (result.skippedVerbose.length < 200) result.skippedVerbose.push(errVerbose);
     }
   });
 
@@ -2234,9 +2439,20 @@ function importExternalVouchers(payload = {}, options = {}) {
       source: sourceName,
       total: result.total,
       fetched: result.fetched,
-      added: result.added,
-      updated: result.updated,
-      skipped: result.skipped,
+    added: result.added,
+    updated: result.updated,
+    skipped: result.skipped,
+    duplicatesAdded: result.duplicatesAdded,
+    newChildren: result.newChildren,
+    updatedChildren: result.updatedChildren,
+      duplicateChildren: result.duplicateChildren,
+      importedVerbose: result.importedVerbose,
+      skippedVerbose: result.skippedVerbose,
+      parentIinStats: Array.from(parentCount.entries())
+        .map(([iin, count]) => ({ iin, count }))
+        .filter((x) => x.count > 1)
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 100),
       courseName: result.courseName || '',
       errors: result.errors
     }
@@ -2757,6 +2973,48 @@ function listAttendanceBoards(filters = {}) {
   });
 }
 
+function getAttendanceExportData(payload = {}) {
+  const db = getDb();
+  const courseIds = Array.isArray(payload.courseIds) ? payload.courseIds.map((id) => Number(id)).filter(Boolean) : [];
+  const where = [];
+  const params = [];
+  if (payload.cityId) {
+    where.push('city.id = ?');
+    params.push(Number(payload.cityId));
+  }
+  if (courseIds.length) {
+    where.push(`c.id IN (${courseIds.map(() => '?').join(',')})`);
+    params.push(...courseIds);
+  }
+
+  let sql = `
+    SELECT
+      g.id AS groupId,
+      g.name AS groupName,
+      c.id AS courseId,
+      c.name AS courseName,
+      st.id AS studioId,
+      st.name AS studioName,
+      city.id AS cityId,
+      city.name AS cityName
+    FROM CourseGroups g
+    JOIN Courses c ON c.id = g.courseId
+    JOIN Studios st ON st.id = c.studioId
+    JOIN Cities city ON city.id = st.cityId
+  `;
+  if (where.length) sql += ` WHERE ${where.join(' AND ')}`;
+  sql += ' ORDER BY city.name, c.name, g.name';
+
+  const groups = db.prepare(sql).all(...params);
+  const dateFrom = payload.dateFrom || toIsoDate(new Date());
+  const dateTo = payload.dateTo || toIsoDate(new Date());
+
+  return groups.map((g) => ({
+    ...g,
+    sheet: getAttendanceSheet({ groupId: g.groupId, dateFrom, dateTo })
+  }));
+}
+
 function saveAttendanceSheet(payload) {
   const db = getDb();
 
@@ -2997,11 +3255,13 @@ module.exports = {
   importDamubalaVouchers,
   importQosymshaVouchers,
   importArtsportVouchers,
+  matchExternalVouchers,
   clearAllChildrenData,
   savePaymentComment,
   markPaymentPaid,
   cancelPaymentTransaction,
   listAttendanceBoards,
+  getAttendanceExportData,
   getAttendanceSheet,
   addAttendanceDate,
   removeAttendanceDate,

@@ -1,6 +1,6 @@
 {
   "name": "studia-manager",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Local desktop app for managing children's creative studios",
   "main": "main/main.js",
   "author": "",
@@ -75,6 +75,7 @@
     "electron-updater": "^6.8.3",
     "jspdf": "^4.2.0",
     "jspdf-autotable": "^5.0.7",
+    "playwright": "^1.58.2",
     "qrcode": "^1.5.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

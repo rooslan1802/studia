@@ -58,6 +58,7 @@ contextBridge.exposeInMainWorld('api', {
   saveAttendanceSheet: (payload) => ipcRenderer.invoke('attendance:sheet-save', payload),
   listAttendanceSessions: (filters) => ipcRenderer.invoke('attendance:list', filters),
   listAttendanceBoards: (filters) => ipcRenderer.invoke('attendance:boards', filters),
+  exportAttendanceExcel: (payload) => ipcRenderer.invoke('attendance:export-excel', payload),
   addAttendanceDate: (payload) => ipcRenderer.invoke('attendance:add-date', payload),
   removeAttendanceDate: (payload) => ipcRenderer.invoke('attendance:remove-date', payload),
 
@@ -100,4 +101,5 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('artsport:progress', listener);
     return () => ipcRenderer.removeListener('artsport:progress', listener);
   },
+  matchImportExisting: (payload) => ipcRenderer.invoke('import:match-existing', payload)
 });
